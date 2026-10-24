@@ -66,6 +66,9 @@ namespace Machine {
 #if MAX_N_I2C
         handler.sections("i2c", 0, MAX_N_I2C, false, _i2c);
 #endif
+#if MAX_N_CAN
+        handler.section("can", _can);
+#endif
 #if MAX_N_SPI
         // We currently support only one SPI bus
         handler.section("spi", _spi);
@@ -198,6 +201,12 @@ namespace Machine {
 #if MAX_N_SPI
         if (_spi == nullptr) {
             _spi = new SPIBus();
+        }
+#endif
+
+#if MAX_N_CAN
+        if (_can == nullptr) {
+            _can = new CanBus();
         }
 #endif
 
@@ -361,6 +370,12 @@ namespace Machine {
     }
 
     MachineConfig::~MachineConfig() {
+        // Stop the CAN worker before the motor drivers that it polls are
+        // destroyed, so it cannot call into freed objects.
+#if MAX_N_CAN
+        delete _can;
+        _can = nullptr;
+#endif
         delete _axes;
 #if MAX_N_I2SO
         delete _i2so;

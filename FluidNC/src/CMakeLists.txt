@@ -83,12 +83,15 @@ idf_component_register(SRCS BTConfig.cpp
 							Machine/Macros.cpp
 							Machine/Motor.cpp
 							Machine/ProbeEventPin.cpp
+							Machine/CanBus.cpp
 							Machine/SPIBus.cpp
 							Machine/UserInputs.cpp
 							Machine/UserOutputs.cpp
 							Motors/Dynamixel2.cpp
 							Motors/MotorDriver.cpp
 							Motors/NullMotor.cpp
+							Motors/Pd42s1Motor.cpp
+							Motors/Pd42s1Protocol.cpp
 							Motors/PwmServo.cpp
 							Motors/RcServo.cpp
 							Motors/Servo.cpp

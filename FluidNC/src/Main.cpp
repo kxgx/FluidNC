@@ -102,6 +102,12 @@ void setup() {
         }
 #    endif
 
+#    if MAX_N_CAN
+        if (config->_can) {
+            config->_can->init();
+        }
+#    endif
+
 #    if SUPPORT_PIN_EXTENDERS
         // We have to initialize the extenders first, before pins are used
         if (config->_extenders) {

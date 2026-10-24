@@ -1,0 +1,318 @@
+// Copyright (c) 2026 - FluidNC contributors
+// Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
+
+#include "Config.h"
+
+#if MAX_N_CAN
+
+#    include "CanBus.h"
+
+#    include "Logging.h"
+
+#    include <driver/twai.h>
+#    include <esp_timer.h>
+
+#    include <cstring>
+
+namespace Machine {
+    namespace {
+        uint32_t now_ms() {
+            return uint32_t(esp_timer_get_time() / 1000);
+        }
+
+        bool timing_for_baud(uint32_t baud, twai_timing_config_t& timing) {
+            switch (baud) {
+                case 125000: {
+                    twai_timing_config_t value = TWAI_TIMING_CONFIG_125KBITS();
+                    timing                     = value;
+                    return true;
+                }
+                case 250000: {
+                    twai_timing_config_t value = TWAI_TIMING_CONFIG_250KBITS();
+                    timing                     = value;
+                    return true;
+                }
+                case 500000: {
+                    twai_timing_config_t value = TWAI_TIMING_CONFIG_500KBITS();
+                    timing                     = value;
+                    return true;
+                }
+                case 1000000: {
+                    twai_timing_config_t value = TWAI_TIMING_CONFIG_1MBITS();
+                    timing                     = value;
+                    return true;
+                }
+                default:
+                    return false;
+            }
+        }
+    }
+
+    void CanBus::group(Configuration::HandlerBase& handler) {
+        // @config tx_pin
+        // @default NO_PIN
+        // @pin_attributes output
+        // TWAI/CAN transmit pin.  Connect it to the D (driver input) pin of the
+        // CAN transceiver -- for a SN65HVD230, pin 1.
+        handler.item("tx_pin", _tx);
+
+        // @config rx_pin
+        // @default NO_PIN
+        // @pin_attributes input
+        // TWAI/CAN receive pin.  Connect it to the R (receiver output) pin of
+        // the CAN transceiver -- for a SN65HVD230, pin 4.
+        handler.item("rx_pin", _rx);
+
+        // @config baud
+        // @default 500000
+        // @tuning per-machine
+        // CAN bit rate in bits per second.  Must match the bit rate configured
+        // in the motor drivers.  The PD42S1 driver supports 125000, 250000,
+        // 500000 and 1000000; this bus supports the same four values.
+        handler.item("baud", _baud);
+
+        // @config command_id
+        // @default 0x1000
+        // @tuning per-machine
+        // 29-bit extended CAN ID used for frames sent by the controller.  The
+        // vendor's CAN examples use 0x1000, which is the PD42S1 default.  Only
+        // change this if the drivers were reprogrammed with command ID 0x6C.
+        handler.item("command_id", _command_id);
+    }
+
+    void CanBus::validate() {
+        if (!configured()) {
+            return;  // A CAN motor driver will report the missing bus.
+        }
+        Assert(_tx.defined() && _rx.defined(), "CAN bus needs both tx_pin and rx_pin");
+        Assert(_tx != _rx, "CAN tx_pin and rx_pin must be different pins");
+        Assert(_baud == 125000 || _baud == 250000 || _baud == 500000 || _baud == 1000000,
+               "CAN baud must be 125000, 250000, 500000 or 1000000");
+        Assert(_command_id <= 0x1FFFFFFF, "CAN command_id must fit in 29 bits");
+    }
+
+    void CanBus::init() {
+        if (_ready) {
+            return;
+        }
+        if (!configured()) {
+            log_verbose("CAN: bus not configured");
+            return;
+        }
+
+        twai_timing_config_t timing;
+        if (!timing_for_baud(_baud, timing)) {
+            log_error("CAN: unsupported baud " << _baud);
+            return;
+        }
+
+        auto tx_pin = _tx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
+        auto rx_pin = _rx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Input);
+        Assert(tx_pin != INVALID_PINNUM, "CAN tx_pin must be a native GPIO");
+        Assert(rx_pin != INVALID_PINNUM, "CAN rx_pin must be a native GPIO");
+
+        _bus_mutex  = xSemaphoreCreateMutex();
+        _list_mutex = xSemaphoreCreateMutex();
+        if (!_bus_mutex || !_list_mutex) {
+            log_error("CAN: cannot create mutexes");
+            return;
+        }
+
+        twai_general_config_t general = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)tx_pin, (gpio_num_t)rx_pin, TWAI_MODE_NORMAL);
+        general.rx_queue_len          = 32;
+        general.tx_queue_len          = 8;
+
+        twai_filter_config_t filter = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+
+        esp_err_t err = twai_driver_install(&general, &timing, &filter);
+        if (err != ESP_OK) {
+            log_error("CAN: driver install failed: " << esp_err_to_name(err));
+            return;
+        }
+        err = twai_start();
+        if (err != ESP_OK) {
+            log_error("CAN: start failed: " << esp_err_to_name(err));
+            twai_driver_uninstall();
+            return;
+        }
+
+        _stop_requested = false;
+        _task_exited    = false;
+        _ready          = true;
+        log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
+
+        if (xTaskCreate(worker_entry, "can", 4096, this, 2, &_task_handle) != pdPASS) {
+            log_error("CAN: cannot create worker task");
+            _task_handle = nullptr;
+            _ready       = false;
+        }
+    }
+
+    void CanBus::add_client(CanBusClient* client) {
+        if (!_list_mutex) {
+            return;
+        }
+        xSemaphoreTake(_list_mutex, portMAX_DELAY);
+        if (_n_clients < MAX_CLIENTS) {
+            _clients[_n_clients++] = client;
+        } else {
+            log_error("CAN: too many clients");
+        }
+        xSemaphoreGive(_list_mutex);
+    }
+
+    void CanBus::take() {
+        if (_bus_mutex) {
+            xSemaphoreTake(_bus_mutex, portMAX_DELAY);
+        }
+    }
+
+    void CanBus::release() {
+        if (_bus_mutex) {
+            xSemaphoreGive(_bus_mutex);
+        }
+    }
+
+    bool CanBus::send_message(const uint8_t* data, size_t len, uint32_t timeout_ms) {
+        if (!_ready) {
+            return false;
+        }
+        size_t offset = 0;
+        while (offset < len) {
+            size_t chunk = len - offset;
+            if (chunk > TWAI_FRAME_MAX_DLC) {
+                chunk = TWAI_FRAME_MAX_DLC;
+            }
+
+            twai_message_t message   = {};
+            message.extd             = 1;
+            message.identifier       = _command_id;
+            message.data_length_code = chunk;
+            memcpy(message.data, data + offset, chunk);
+
+            esp_err_t err = twai_transmit(&message, pdMS_TO_TICKS(timeout_ms));
+            if (err != ESP_OK) {
+                return false;
+            }
+            offset += chunk;
+        }
+        return true;
+    }
+
+    size_t CanBus::receive_chunk(uint8_t* buf, size_t max_len, uint32_t timeout_ms) {
+        if (!_ready) {
+            return 0;
+        }
+        twai_message_t message;
+        esp_err_t      err = twai_receive(&message, pdMS_TO_TICKS(timeout_ms));
+        if (err != ESP_OK) {
+            return 0;
+        }
+        if (message.rtr) {
+            return 0;
+        }
+        size_t len = message.data_length_code;
+        if (len > max_len) {
+            len = max_len;
+        }
+        memcpy(buf, message.data, len);
+        return len;
+    }
+
+    void CanBus::check_state() {
+        // The worker calls this with no lock held, but a transaction from the
+        // main task may still be in progress during startup; recovering or
+        // restarting the controller must not race with a queued TWAI transfer.
+        Lock lock(*this);
+
+        twai_status_info_t status;
+        if (twai_get_status_info(&status) != ESP_OK) {
+            return;
+        }
+        if (status.state == TWAI_STATE_BUS_OFF) {
+            log_error("CAN: bus off, starting recovery");
+            twai_initiate_recovery();
+        } else if (status.state == TWAI_STATE_STOPPED) {
+            twai_start();
+        }
+    }
+
+    void CanBus::worker() {
+        uint32_t now         = now_ms();
+        _last_state_check_ms = now;
+
+        while (!_stop_requested) {
+            now = now_ms();
+
+            CanBusClient* snapshot[MAX_CLIENTS];
+            size_t        count = 0;
+            xSemaphoreTake(_list_mutex, portMAX_DELAY);
+            count = _n_clients;
+            for (size_t i = 0; i < count; ++i) {
+                snapshot[i] = _clients[i];
+            }
+            xSemaphoreGive(_list_mutex);
+
+            for (size_t i = 0; i < count; ++i) {
+                if (snapshot[i]) {
+                    snapshot[i]->can_poll(now);
+                }
+            }
+
+            if (now - _last_state_check_ms >= 500) {
+                _last_state_check_ms = now;
+                check_state();
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+
+        _task_exited = true;
+        vTaskDelete(nullptr);
+    }
+
+    void CanBus::worker_entry(void* arg) {
+        static_cast<CanBus*>(arg)->worker();
+    }
+
+    void CanBus::stop_worker() {
+        if (!_task_handle) {
+            return;
+        }
+        _stop_requested = true;
+        // A transaction is bounded by the protocol timeout (well under two
+        // seconds), so the worker normally exits promptly.  If it does not,
+        // leave it and its mutexes alone rather than deleting a mutex that the
+        // task might still be holding.
+        for (int i = 0; i < 400 && !_task_exited; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        if (!_task_exited) {
+            log_error("CAN: worker task did not stop");
+            _task_handle = nullptr;
+            _bus_mutex   = nullptr;
+            _list_mutex  = nullptr;
+            return;
+        }
+        _task_handle = nullptr;
+    }
+
+    CanBus::~CanBus() {
+        stop_worker();
+        if (_ready) {
+            twai_stop();
+            twai_driver_uninstall();
+            _ready = false;
+        }
+        if (_bus_mutex) {
+            vSemaphoreDelete(_bus_mutex);
+            _bus_mutex = nullptr;
+        }
+        if (_list_mutex) {
+            vSemaphoreDelete(_list_mutex);
+            _list_mutex = nullptr;
+        }
+    }
+}
+
+#endif  // MAX_N_CAN

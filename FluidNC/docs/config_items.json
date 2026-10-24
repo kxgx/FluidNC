@@ -369,6 +369,32 @@
    "description": "SPI bus clock line. Must be a native MCU pin with output capability.\n"
   }
  },
+ "can": {
+  "tx_pin": {
+   "type": "pin",
+   "default": "NO_PIN",
+   "pin_attributes": "output",
+   "description": "TWAI/CAN transmit pin.  Connect it to the D (driver input) pin of the CAN transceiver -- for a SN65HVD230, pin 1.\n"
+  },
+  "rx_pin": {
+   "type": "pin",
+   "default": "NO_PIN",
+   "pin_attributes": "input",
+   "description": "TWAI/CAN receive pin.  Connect it to the R (receiver output) pin of the CAN transceiver -- for a SN65HVD230, pin 4.\n"
+  },
+  "baud": {
+   "type": "integer",
+   "default": "500000",
+   "tuning": "per-machine",
+   "description": "CAN bit rate in bits per second.  Must match the bit rate configured in the motor drivers.  The PD42S1 driver supports 125000, 250000, 500000 and 1000000; this bus supports the same four values.\n"
+  },
+  "command_id": {
+   "type": "integer",
+   "default": "0x1000",
+   "tuning": "per-machine",
+   "description": "29-bit extended CAN ID used for frames sent by the controller.  The vendor's CAN examples use 0x1000, which is the PD42S1 default.  Only change this if the drivers were reprogrammed with command ID 0x6C.\n"
+  }
+ },
  "i2cN": {
   "sda_pin": {
    "type": "pin",
@@ -2096,6 +2122,62 @@
    "type": "integer",
    "default": "50",
    "description": "Update interval, in milliseconds, for refreshing the servo's commanded position.\n"
+  }
+ },
+ "axes.<letter>.motorN.pd42s1": {
+  "address": {
+   "type": "integer",
+   "min": 1,
+   "max": 255,
+   "default": "1",
+   "tuning": "per-machine",
+   "description": "CAN slave address of this driver, 1..255.  Must match the value written to the driver with setting 0x60 (set slave address). Address 0 is the broadcast address and cannot be used here.\n"
+  },
+  "counts_per_step": {
+   "type": "float",
+   "min": 1e-06,
+   "max": 1000000.0,
+   "default": "1.0",
+   "tuning": "per-machine",
+   "description": "Driver position units per FluidNC step.  The PD42S1 position commands use 51200 units per revolution, so this is 51200 / (steps_per_mm * mm_per_rev) for the axis.  Set it to 1.0 when steps_per_mm has been chosen to match the driver units.\n"
+  },
+  "invert_direction": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "typical",
+   "description": "Reverses the direction in which this motor follows the step stream; use it instead of swapping motor phases on a closed-loop driver that cannot be rewired.\n"
+  },
+  "speed_rpm": {
+   "type": "integer",
+   "min": 1,
+   "max": 6000,
+   "default": "600",
+   "tuning": "per-machine",
+   "description": "Speed in RPM that the driver is allowed to use while following the position stream.  Must be at least the axis's maximum speed (max_rate_mm_per_min converted to motor RPM) or the motor will lag behind the commanded position.\n"
+  },
+  "accel": {
+   "type": "integer",
+   "min": 0,
+   "max": 200,
+   "default": "200",
+   "tuning": "per-machine",
+   "description": "Acceleration in revolutions/second^2 (0..200) that the driver is allowed to use while following the position stream.  The firmware streams small position increments, so a high value here keeps the motor tracking closely.\n"
+  },
+  "update_ms": {
+   "type": "integer",
+   "min": 2,
+   "max": 1000,
+   "default": "20",
+   "tuning": "typical",
+   "description": "Interval in milliseconds between position commands.  The driver interpolates between them.  Smaller values track the step stream more closely at the cost of more CAN traffic.\n"
+  },
+  "status_poll_ms": {
+   "type": "integer",
+   "min": 0,
+   "max": 60000,
+   "default": "1000",
+   "tuning": "typical",
+   "description": "Interval in milliseconds between driver position readbacks, used for diagnostics.  Set to 0 to disable readbacks.\n"
   }
  },
  "axes.<letter>.motorN.unipolar": {

@@ -28,6 +28,7 @@
 // The number that we support, regardless of how many the chip has
 #define MAX_N_I2SO 1
 #define MAX_N_SPI 1
+#define MAX_N_CAN 1  // one TWAI controller; external CAN transceiver required
 #define MAX_N_SDCARD 1
 #define MAX_N_SIMULATOR 0
 

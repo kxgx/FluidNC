@@ -35,6 +35,12 @@ SECTIONS = [
     ("probe", [("Probe.cpp", "Probe")], None),
     ("parking", [("Parking.cpp", "Parking")], None),
     ("spi", [("Machine/SPIBus.cpp", "SPIBus")], None),
+    (
+        "can",
+        [("Machine/CanBus.cpp", "CanBus")],
+        "CAN (TWAI) bus used to command CAN motor drivers.  The ESP32 provides only the CAN "
+        "controller, so an external transceiver is required.  Present on ESP32 targets only.",
+    ),
     ("i2cN", [("Machine/I2CBus.cpp", "I2CBus")], None),
     ("i2so", [("Machine/I2SOBus.cpp", "I2SOBus")], None),
     ("sdcard", [("SDCard.h", "SDCard")], None),
@@ -123,6 +129,13 @@ SECTIONS = [
     ("axes.<letter>.motorN.rc_servo", [("Motors/RcServo.h", "RcServo")], None),
     ("axes.<letter>.motorN.solenoid", [("Motors/Solenoid.h", "Solenoid")], None),
     ("axes.<letter>.motorN.dynamixel2", [("Motors/Dynamixel2.h", "Dynamixel2")], None),
+    (
+        "axes.<letter>.motorN.pd42s1",
+        [("Motors/Pd42s1Motor.h", "Pd42s1Motor")],
+        "ALIENTEK PD42S1 closed-loop stepper driver commanded over CAN.  Requires a can: section "
+        "and a driver address that matches the value programmed with the vendor's 0x60 command.  "
+        "Present on ESP32 targets only.",
+    ),
     (
         "axes.<letter>.motorN.unipolar",
         [("Motors/UnipolarMotor.h", "UnipolarMotor")],

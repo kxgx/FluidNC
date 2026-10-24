@@ -43,7 +43,7 @@ The config file has an implicit root (there is **no** `machine:` wrapper key —
 
 | Kind | Keys |
 |---|---|
-| Singular sections | `stepping`, `i2so`, `spi`, `sdcard`, `kinematics`, `axes`, `control`, `coolant`, `probe`, `macros`, `start`, `parking`, `user_outputs`, `user_inputs`, `oled`, `status_outputs` |
+| Singular sections | `stepping`, `i2so`, `spi`, `can`, `sdcard`, `kinematics`, `axes`, `control`, `coolant`, `probe`, `macros`, `start`, `parking`, `user_outputs`, `user_inputs`, `oled`, `status_outputs` |
 | Numbered sections | `uart0`…`uart9`, `uart_channel0`…, `i2c0`… (one digit each) |
 | Spindle types | one or more of `PWM`, `Laser`, `10V`, `BESC`, `HBridge`, `OnOff`, `Relay`, `DAC`, `PlasmaSpindle`, `NoSpindle`, `ModbusVFD`, plus the named-VFD keys (`Huanyang`, `H2A`, `YL620`, `DeltaMS300`, `FolinnBD600`, `H100`, `MollomG70`, `NowForever`, `SiemensV20`, `DanfossVLT2800`) — see `spindle_sections:` / `vfd_named_types:` in `config_items.yaml` |
 | ATC | `atc_manual` (referenced by a spindle's `atc:` field) |
@@ -65,7 +65,7 @@ axes:
       <one driver-type block>   # standard_stepper | stepstick | tmc_2130 | tmc_2208 |
                                 # tmc_2209 | tmc_5160 | tmc_2160 | tmc_5160Pro |
                                 # tmc_2160Pro | rc_servo | solenoid | dynamixel2 |
-                                # unipolar | null_motor
+                                # pd42s1 | unipolar | null_motor
 kinematics:
   <one type block>         # Cartesian | CoreXY | midtbot | parallel_delta | WallPlotter
 uart3:
@@ -184,10 +184,12 @@ special_value := "NO_PIN"               (canonical "no pin", stands alone with n
 - **`tmc_*` `uart_num:` must reference a top-level `uartN:` section.** There is no per-motor nested `uart:` sub-block.
 - **`unipolar:` has no `step_pin`/`direction_pin`.** The four `phaseN_pin`s are the whole pin set and must be `gpio.` pins (rejected otherwise). Reverse direction by swapping `phase0`↔`phase3` and `phase1`↔`phase2`. Setting `half_step: false` halves steps/rev, so halve the axis's `steps_per_mm` to match.
 - **`rc_servo:` / `solenoid:` / `dynamixel2:`:** reverse direction by swapping the two end values (`min_pulse_us`/`max_pulse_us`, or `count_min`/`count_max`), not by inverting a pin. `soft_limits: true` is strongly recommended on a servo axis. `dynamixel2` `id:` default `255` is the broadcast address — always set a real per-servo ID.
+- **`pd42s1:` has no `step_pin`/`direction_pin`.** It is commanded in absolute position mode over the `can:` bus: FluidNC's step stream is accumulated by the step ISR and streamed to the driver as position commands. `address:` must match the driver's `0x60` slave address and be unique per motor (1..255; 0 is broadcast). `counts_per_step:` converts FluidNC steps into the driver's position units (51200 per revolution), and `invert_direction:` replaces a direction pin. The driver must be configured over UART first — slave address, CAN bit rate matching `can.baud`, and the parameters saved. ESP32 targets with a TWAI controller only.
 
 ### Buses
 
 - **`spi:` and `sdcard:` are required together** — defining one without the other leaves the SD card non-functional.
+- **`can:` requires an external CAN transceiver** — the ESP32 has a CAN controller but no physical layer. `tx_pin`/`rx_pin` are the transceiver's D/R pins. `baud:` must match the bit rate programmed into every `pd42s1` driver, and `command_id:` is the 29-bit extended ID used for host-to-driver frames (0x1000 in the vendor's examples). Available on ESP32 targets only.
 - **`uart_num: N` references a top-level `uartN:` section** (order-free, §0.11). Baud/mode for a Trinamic driver or a VFD live on that `uartN:` section, not on the driver/spindle.
 - **`usb_host:` is a nested subsection of a `uartN:` block** selecting a USB virtual COM port instead of hardware UART pins (ESP32-S3). When present, the plain `txd_pin`/`rxd_pin`/`baud`/`mode` fields of that `uartN:` do not apply.
 - **A `uart_channelN.M` pin** needs a `uart_channelN:` section, which in turn needs `uart_num:` pointing at a real `uartN:`.
