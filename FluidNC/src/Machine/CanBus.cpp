@@ -460,6 +460,18 @@ namespace Machine {
         enable_driver_echo_locked(address);
     }
 
+    void CanBus::enable_all_driver_echo() {
+        if (!_ready) {
+            log_info("CAN echo: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+        for (uint8_t address = 1; address <= 8; ++address) {
+            enable_driver_echo_locked(address);
+        }
+        log_info("CAN echo: sent 0x6F=0 to addresses 1..8");
+    }
+
     void CanBus::set_driver_echo(bool enable) {
         if (!_ready) {
             return;

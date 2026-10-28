@@ -109,6 +109,11 @@ namespace Machine {
         // every later transaction.  Takes the lock internally.
         void enable_driver_echo(uint8_t address);
 
+        // Sends 0x6F = 0 to every possible address (1..8).  Needed only when
+        // a driver was left with command echo disabled by an earlier tool;
+        // normal operation and scans leave 0x6F at its factory default.
+        void enable_all_driver_echo();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();
