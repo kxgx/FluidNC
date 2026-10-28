@@ -145,3 +145,37 @@ TEST(Pd42s1Protocol, RejectsErrorStatus) {
     EXPECT_TRUE(Pd42s1Protocol::valid_response(frame, sizeof(frame)));
     EXPECT_FALSE(Pd42s1Protocol::parse_ack(frame, sizeof(frame)));
 }
+
+TEST(Pd42s1Protocol, BuildsClearStateCommand) {
+    // Manual example 4.4.12: C5 01 FB C1 5C.
+    std::array<uint8_t, 8> frame {};
+    size_t len = Pd42s1Protocol::build_clear_state_command(1, frame.data(), frame.size());
+
+    ASSERT_EQ(len, 5u);
+    EXPECT_EQ(frame[0], 0xC5);
+    EXPECT_EQ(frame[1], 1);
+    EXPECT_EQ(frame[2], Pd42s1Protocol::FUNC_CLEAR_STATE);
+    EXPECT_EQ(frame[3], 0xC1);
+    EXPECT_EQ(frame[4], 0x5C);
+}
+
+TEST(Pd42s1Protocol, BuildsClearStallCommand) {
+    // Manual example 4.4.10: C5 01 F9 BF 5C.
+    std::array<uint8_t, 8> frame {};
+    size_t len = Pd42s1Protocol::build_clear_stall_command(1, frame.data(), frame.size());
+
+    ASSERT_EQ(len, 5u);
+    EXPECT_EQ(frame[2], Pd42s1Protocol::FUNC_CLEAR_STALL);
+    EXPECT_EQ(frame[3], 0xBF);
+    EXPECT_EQ(frame[4], 0x5C);
+}
+
+TEST(Pd42s1Protocol, ParsesClearStateAck) {
+    // Manual example 4.4.12 response: C5 01 FB 01 C2 5C.
+    uint8_t frame[6] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_CLEAR_STATE, Pd42s1Protocol::STATUS_OK };
+    finish_response(frame, sizeof(frame));
+
+    EXPECT_EQ(Pd42s1Protocol::expected_response_length(frame, sizeof(frame)), 6u);
+    EXPECT_TRUE(Pd42s1Protocol::valid_response(frame, sizeof(frame)));
+    EXPECT_TRUE(Pd42s1Protocol::parse_ack(frame, sizeof(frame)));
+}

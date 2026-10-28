@@ -118,6 +118,11 @@ namespace Machine {
         // Diagnostic only; takes the transaction lock internally.
         void report_status();
 
+        // Sends 0xFB (clear stall / brake / disabled state) to all drivers:
+        // broadcast first, then every address 1..8.  Does not enable the
+        // motors; the normal motor sync will re-enable them when needed.
+        void clear_driver_faults();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();

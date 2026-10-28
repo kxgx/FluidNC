@@ -56,6 +56,18 @@ namespace MotorDrivers {
         return build_frame(address, FUNC_SET_MOTOR_ENABLE, data, sizeof(data), out, out_size);
     }
 
+    size_t Pd42s1Protocol::build_clear_state_command(uint8_t address, uint8_t* out, size_t out_size) {
+        return build_frame(address, FUNC_CLEAR_STATE, nullptr, 0, out, out_size);
+    }
+
+    size_t Pd42s1Protocol::build_clear_stall_command(uint8_t address, uint8_t* out, size_t out_size) {
+        return build_frame(address, FUNC_CLEAR_STALL, nullptr, 0, out, out_size);
+    }
+
+    size_t Pd42s1Protocol::build_stop_now_command(uint8_t address, uint8_t* out, size_t out_size) {
+        return build_frame(address, FUNC_STOP_NOW, nullptr, 0, out, out_size);
+    }
+
     size_t Pd42s1Protocol::build_read_command(uint8_t address, uint8_t function, uint8_t* out, size_t out_size) {
         return build_frame(address, function, nullptr, 0, out, out_size);
     }
@@ -89,6 +101,10 @@ namespace MotorDrivers {
                 return 7;  // status + 1-byte enable state
             case FUNC_SET_ECHO:
                 return 7;  // status + 1-byte echo state
+            case FUNC_CLEAR_STALL:
+            case FUNC_CLEAR_STATE:
+            case FUNC_STOP_NOW:
+                return 6;  // status only
             case FUNC_POSITION_MODE:
                 return 6;  // status only
             default:

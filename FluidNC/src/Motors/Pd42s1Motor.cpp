@@ -109,7 +109,8 @@ namespace MotorDrivers {
 
     bool Pd42s1Motor::transact(
         const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs) {
-        responseLen = 0;
+        responseLen    = 0;
+        _lastErrorCode = 0;
         if (!_bus || !_bus->ready() || requestLen == 0) {
             return false;
         }
@@ -162,6 +163,7 @@ namespace MotorDrivers {
                 // behind the generic "not acknowledged" warnings.
                 char message[32];
                 snprintf(message, sizeof(message), "command error 0x%02X", response[3]);
+                _lastErrorCode = response[3];
                 warn_throttled(now_ms(), message);
             } else {
                 ok = true;
@@ -188,6 +190,40 @@ namespace MotorDrivers {
             }
         }
         return false;
+    }
+
+    bool Pd42s1Motor::clear_fault() {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+        uint8_t address     = uint8_t(_address);
+
+        // 0xFB clears the driver's stall, brake and disabled state.
+        size_t len = Pd42s1Protocol::build_clear_state_command(address, request, sizeof(request));
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
+            !Pd42s1Protocol::parse_ack(response, responseLen)) {
+            warn_throttled(now_ms(), "clearing abnormal state failed");
+            return false;
+        }
+
+        // Clearing the state also clears the enable state; enable the motor
+        // again so the next sync can immediately stream positions.
+        len = Pd42s1Protocol::build_enable_command(address, true, request, sizeof(request));
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
+            !Pd42s1Protocol::parse_ack(response, responseLen)) {
+            warn_throttled(now_ms(), "re-enable after clearing abnormal state failed");
+            return false;
+        }
+
+        _lastErrorCode = 0;
+        _readFailures  = 0;
+        _writeFailures = 0;
+        _synced        = false;  // force a fresh version/position sync
+        _targetDirty   = true;
+        _disabled      = false;
+        _online        = true;
+        log_info("CAN: " << name() << " abnormal state cleared (0xFB), motor re-enabled");
+        return true;
     }
 
     bool Pd42s1Motor::sync() {
@@ -300,6 +336,14 @@ namespace MotorDrivers {
             // no new target to trigger another update.
             _targetDirty = true;
             warn_throttled(now_ms(), "position command was not acknowledged");
+            if (_lastErrorCode) {
+                // The driver answered with a fault code (0xE1..0xE6).  Clear
+                // the abnormal state and re-enable it; the next can_poll()
+                // pass re-synchronises and re-sends the target.
+                warn_throttled(now_ms(), "driver reported an error; clearing abnormal state");
+                clear_fault();
+                return false;
+            }
             if (_writeFailures >= 3) {
                 _writeFailures = 0;
                 _synced        = false;  // resync (and re-enable echo) after repeated failures

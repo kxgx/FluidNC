@@ -129,6 +129,12 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
    * `$CANStatus` -- TWAI state, tx/rx error counters, bus error count,
      queue fill, number of bus-off recoveries, configured pins/baud/ID and the
      cached echo state.
+   * `$CANClear` -- send `0xFB` (clear stall / brake / disabled state) to the
+     broadcast address and then to addresses 1..8; reports how many drivers
+     acknowledged.  It does not enable the motors; the normal sync re-enables
+     them.  Use it after a stall/brake fault.  A driver error status
+     (0xE1..0xE6) on a position command also triggers this automatically,
+     followed by a re-enable and a fresh sync.
    * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
      each candidate GPIO low.  Bench/debug only: it briefly drives pins that
      may be limit switches, STEP/DIR or enable lines.

@@ -44,7 +44,10 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_READ_POSITION    = 0x2A;
         static constexpr uint8_t FUNC_READ_STATUS      = 0x2C;
         static constexpr uint8_t FUNC_SET_ECHO         = 0x6F;
+        static constexpr uint8_t FUNC_CLEAR_STALL      = 0xF9;  // clear stall protection
         static constexpr uint8_t FUNC_SET_MOTOR_ENABLE = 0xFA;
+        static constexpr uint8_t FUNC_CLEAR_STATE      = 0xFB;  // clear stall/brake/disabled state
+        static constexpr uint8_t FUNC_STOP_NOW         = 0xFC;  // brake immediately
         static constexpr uint8_t FUNC_POSITION_MODE    = 0xF2;
 
         static constexpr size_t MAX_FRAME_LEN = 16;
@@ -64,6 +67,18 @@ namespace MotorDrivers {
 
         // Builds the motor enable/disable command (0xFA).
         static size_t build_enable_command(uint8_t address, bool enable, uint8_t* out, size_t out_size);
+
+        // Builds the "clear abnormal state" command (0xFB): clears stall,
+        // brake and disabled state.  Returns 6-byte acknowledge.
+        static size_t build_clear_state_command(uint8_t address, uint8_t* out, size_t out_size);
+
+        // Builds the stall-protection release command (0xF9), for the case
+        // where only the stall latch needs clearing.
+        static size_t build_clear_stall_command(uint8_t address, uint8_t* out, size_t out_size);
+
+        // Builds the immediate-brake command (0xFC).  The manual warns that
+        // the motor can get hot if the state is not cleared afterwards.
+        static size_t build_stop_now_command(uint8_t address, uint8_t* out, size_t out_size);
 
         // Builds a command with no data payload, e.g. a read command.
         static size_t build_read_command(uint8_t address, uint8_t function, uint8_t* out, size_t out_size);

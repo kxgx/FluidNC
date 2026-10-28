@@ -701,6 +701,42 @@ namespace Machine {
                                    << " command_id=" << uint32_t(_command_id) << " echoes=" << (_echo_state ? "on" : "off"));
     }
 
+    void CanBus::clear_driver_faults() {
+        if (!_ready) {
+            log_info("CAN clear: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+
+        // Broadcast first: every powered driver executes it without replying.
+        size_t len = Pd42s1Protocol::build_clear_state_command(0, request, sizeof(request));
+        if (len) {
+            log_info("CAN: clearing driver abnormal state (0xFB broadcast)");
+            send_message(request, len, 50);
+            vTaskDelay(pdMS_TO_TICKS(5));
+        }
+        flush_receive();
+
+        // Then ask each address individually, both to cover drivers that
+        // ignore broadcast frames and to report how many answered.
+        int acked = 0;
+        for (uint8_t address = 1; address <= 8; ++address) {
+            len = Pd42s1Protocol::build_clear_state_command(address, request, sizeof(request));
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                size_t responseLen = 0;
+                if (transact(request, len, response, sizeof(response), responseLen, 50) &&
+                    Pd42s1Protocol::parse_ack(response, responseLen)) {
+                    acked++;
+                    break;
+                }
+            }
+        }
+        log_info("CAN: 0xFB clear-state acknowledged by " << acked << " address(es)");
+    }
+
     void CanBus::worker() {
         uint32_t now         = now_ms();
         _last_state_check_ms = now;
