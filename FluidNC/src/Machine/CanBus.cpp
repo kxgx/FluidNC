@@ -461,6 +461,12 @@ namespace Machine {
     }
 
     void CanBus::enable_all_driver_echo_locked() {
+        // Broadcast first: every powered driver executes it without replying,
+        // even if it is currently set to "no reply".  Then send the same
+        // setting to each address individually, which also covers drivers
+        // that filter broadcast frames.
+        send_echo_state_forced(true);
+        vTaskDelay(pdMS_TO_TICKS(5));
         for (uint8_t address = 1; address <= 8; ++address) {
             enable_driver_echo_locked(address);
         }
