@@ -112,14 +112,16 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
    mode (or through 10k..100k for slope control).
 6. Diagnostics:
    * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters,
-     broadcast `0x6F = 0` (enable command echo only for the read), version
-     reads at addresses 1..8 at the configured bit rate, then broadcast
-     `0x6F = 1` (command echo off again).  A running motor driver re-enables
-     echo automatically at its next sync.  The reported
+     then for each address 1..8: sends an **addressed** `0x6F = 0` (enable
+     command echo on that specific driver; the official example simply leaves
+     the factory-default echo on and never toggles it), followed by up to three
+     version-read attempts.  Echo is left enabled afterwards; there is no
+     broadcast and no echo-off step (a broadcast can be missed by one driver
+     on a marginal bus, which would leave it silent forever).  The reported
      `TWAI tx_err before -> after` tells whether any node ACKed the frames:
      `0 -> 0` means a powered node is present, an increase means nobody ACKed
      (check power, CANH/CANL wiring and bit rate).
-   * `$CANScan=all` -- repeats the echo-on/scan/echo-off sequence at 125k,
+   * `$CANScan=all` -- repeats the same per-address echo/read sequence at 125k,
      250k, 500k and 1 Mbps (useful when the driver bit rate is unknown);
      restores the configured bit rate and restarts the CAN worker afterwards.
    * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
