@@ -30,6 +30,25 @@ namespace MotorDrivers {
             return uint32_t(esp_timer_get_time() / 1000);
         }
 
+        const char* error_code_name(uint8_t code) {
+            switch (code) {
+                case 0xE1:
+                    return "frame too short";
+                case 0xE2:
+                    return "bad frame header";
+                case 0xE3:
+                    return "bad frame tail";
+                case 0xE4:
+                    return "checksum error";
+                case 0xE5:
+                    return "unsupported function";
+                case 0xE6:
+                    return "invalid data";
+                default:
+                    return "unknown error";
+            }
+        }
+
         void IRAM_ATTR pd42s1_step_thunk(MotorDriver* driver) {
             static_cast<Pd42s1Motor*>(driver)->step_isr();
         }
@@ -161,8 +180,8 @@ namespace MotorDrivers {
                 // The driver answered but rejected the command.  Report the
                 // manual's error code (0xE1..0xE6) instead of letting it hide
                 // behind the generic "not acknowledged" warnings.
-                char message[32];
-                snprintf(message, sizeof(message), "command error 0x%02X", response[3]);
+                char message[64];
+                snprintf(message, sizeof(message), "command error 0x%02X (%s)", response[3], error_code_name(response[3]));
                 _lastErrorCode = response[3];
                 warn_throttled(now_ms(), message);
             } else {

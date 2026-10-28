@@ -63,6 +63,13 @@ namespace Machine {
         bool configured() const { return _tx.defined() && _rx.defined(); }
         bool ready() const { return _ready; }
 
+        // True when at least one PD42S1 CAN motor driver was configured.  The
+        // bus, worker and all $CAN.../M15x commands are gated on this so a
+        // machine without a pd42s1 motor never starts the CAN subsystem.
+        static void mark_driver_configured();
+        static bool driver_configured();
+        bool        enabled() const { return _driver_configured; }
+
         uint32_t command_id() const { return _command_id; }
 
         void add_client(CanBusClient* client);
@@ -165,6 +172,7 @@ namespace Machine {
         ~CanBus();
 
     private:
+        bool        driver_ok(const char* operation);
         void        take();
         void        release();
         void        check_state();
@@ -188,6 +196,8 @@ namespace Machine {
         Pin      _rx;
         uint32_t _baud       = 500000;
         uint32_t _command_id = 0x1000;
+
+        static bool _driver_configured;
 
         bool              _ready          = false;
         SemaphoreHandle_t _bus_mutex      = nullptr;

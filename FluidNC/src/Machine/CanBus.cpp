@@ -18,6 +18,8 @@
 #    include <cstring>
 
 namespace Machine {
+
+    bool CanBus::_driver_configured = false;
     using MotorDrivers::Pd42s1Protocol;
 
     namespace {
@@ -139,6 +141,10 @@ namespace Machine {
     }
 
     void CanBus::init() {
+        if (!_driver_configured) {
+            log_verbose("CAN: no PD42S1 motor configured; CAN disabled");
+            return;
+        }
         if (_ready) {
             return;
         }
@@ -287,6 +293,22 @@ namespace Machine {
             log_error("CAN: too many clients");
         }
         xSemaphoreGive(_list_mutex);
+    }
+
+    void CanBus::mark_driver_configured() {
+        _driver_configured = true;
+    }
+
+    bool CanBus::driver_configured() {
+        return _driver_configured;
+    }
+
+    bool CanBus::driver_ok(const char* operation) {
+        if (!_driver_configured) {
+            log_info("CAN " << operation << ": no PD42S1 motor configured; CAN disabled");
+            return false;
+        }
+        return true;
     }
 
     void CanBus::take() {
@@ -499,6 +521,7 @@ namespace Machine {
     }
 
     void CanBus::enable_all_driver_echo() {
+        if (!driver_ok("echo")) return;
         if (!_ready) {
             log_info("CAN echo: bus not ready");
             return;
@@ -564,6 +587,7 @@ namespace Machine {
     }
 
     int CanBus::scan() {
+        if (!driver_ok("scan")) return 0;
         if (!_ready) {
             log_info("CAN scan: bus not ready");
             return 0;
@@ -613,6 +637,7 @@ namespace Machine {
     }
 
     int CanBus::scan_all_bauds() {
+        if (!driver_ok("scan")) return 0;
         if (!_ready) {
             log_info("CAN scan: bus not ready");
             return 0;
@@ -701,6 +726,7 @@ namespace Machine {
     }
 
     void CanBus::report_status() {
+        if (!driver_ok("status")) return;
         if (!_ready) {
             log_info("CAN status: bus not ready");
             return;
@@ -722,6 +748,7 @@ namespace Machine {
     }
 
     void CanBus::clear_driver_faults() {
+        if (!driver_ok("clear")) return;
         if (!_ready) {
             log_info("CAN clear: bus not ready");
             return;
@@ -752,6 +779,7 @@ namespace Machine {
     }
 
     void CanBus::report_driver_faults() {
+        if (!driver_ok("faults")) return;
         if (!_ready) {
             log_info("CAN faults: bus not ready");
             return;
@@ -821,6 +849,7 @@ namespace Machine {
     }
 
     void CanBus::report_driver_positions() {
+        if (!driver_ok("positions")) return;
         if (!_ready) {
             log_info("CAN positions: bus not ready");
             return;
@@ -897,6 +926,7 @@ namespace Machine {
     }
 
     void CanBus::stop_all_drivers() {
+        if (!driver_ok("stop")) return;
         if (!_ready) {
             log_info("CAN stop: bus not ready");
             return;
@@ -914,6 +944,7 @@ namespace Machine {
     }
 
     void CanBus::read_raw(uint8_t address, uint8_t function) {
+        if (!driver_ok("read")) return;
         if (!_ready) {
             log_info("CAN read: bus not ready");
             return;
@@ -944,7 +975,9 @@ namespace Machine {
         log_warn("CAN read: address " << int(address) << " function " << funcText << ": no response");
     }
 
-    void CanBus::restart_drivers() {        if (!_ready) {
+    void CanBus::restart_drivers() {
+        if (!driver_ok("reset")) return;
+        if (!_ready) {
             log_info("CAN reset: bus not ready");
             return;
         }

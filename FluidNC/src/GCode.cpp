@@ -25,6 +25,55 @@
 #include <math.h>    // sqrt etc.
 #include <vector>
 
+#if MAX_N_CAN
+static void execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
+    auto* can = config ? config->_can : nullptr;
+    if (!can) {
+        log_info("CAN: no can: section configured");
+        return;
+    }
+    switch (code) {
+        case 150:
+            can->scan();
+            break;
+        case 151:
+            can->scan_all_bauds();
+            break;
+        case 152:
+            can->report_status();
+            break;
+        case 153:
+            can->report_driver_faults();
+            break;
+        case 154:
+            can->report_driver_positions();
+            break;
+        case 155:
+            can->clear_driver_faults();
+            break;
+        case 156:
+            can->enable_all_driver_echo();
+            break;
+        case 157:
+            can->stop_all_drivers();
+            break;
+        case 158:
+            can->restart_drivers();
+            break;
+        case 159:
+            if (p < 1 || p > 255 || q < 0 || q > 255) {
+                log_info("CAN M159: P = address (1..255), Q = function code (0..255)");
+                break;
+            }
+            can->read_raw(uint8_t(p), uint8_t(q));
+            break;
+        default:
+            log_info("CAN: unknown M" << int(code));
+            break;
+    }
+}
+#endif
+
 // Allow iteration over CoordIndex values
 CoordIndex& operator++(CoordIndex& i) {
     i = static_cast<CoordIndex>(static_cast<size_t>(i) + 1);
@@ -923,6 +972,26 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                         modal_state_op = ModalStateOp(int_value);
                         mg_word_bit    = ModalGroup::MM11;
                         break;
+#if MAX_N_CAN
+                    // M150..M159: CAN diagnostic/control commands.
+                    // 150 scan, 151 scan all bauds, 152 bus status,
+                    // 153 driver faults, 154 driver positions,
+                    // 155 release stall, 156 echo on, 157 immediate stop,
+                    // 158 restart drivers, 159 raw read (P=addr, Q=func).
+                    case 150:
+                    case 151:
+                    case 152:
+                    case 153:
+                    case 154:
+                    case 155:
+                    case 156:
+                    case 157:
+                    case 158:
+                    case 159:
+                        gc_block.can_mcode = uint8_t(int_value);
+                        mg_word_bit        = ModalGroup::MM10;
+                        break;
+#endif
                     default:
                         return Error::GcodeUnsupportedCommand;  // [Unsupported M command]
                 }
@@ -1778,6 +1847,12 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                        bitnum_to_mask(GCodeWord::U) | bitnum_to_mask(GCodeWord::V) | bitnum_to_mask(GCodeWord::W));  // Remove axis words.
     }
     clear_bits(value_words, (bitnum_to_mask(GCodeWord::D) | bitnum_to_mask(GCodeWord::O)));
+#if MAX_N_CAN
+    if (gc_block.can_mcode) {
+        // M159 uses P (address) and Q (function).
+        clear_bits(value_words, bitnum_to_mask(GCodeWord::P) | bitnum_to_mask(GCodeWord::Q));
+    }
+#endif
     if (value_words) {
         return Error::GcodeUnusedWords;  // [Unused words]
     }
@@ -1848,6 +1923,18 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
             }
         }
     }
+#if MAX_N_CAN
+    // M150..M159 are immediate CAN commands; they do not involve motion.
+    if (gc_block.can_mcode) {
+        const uint8_t code = gc_block.can_mcode;
+        const int32_t p    = int32_t(gc_block.values.p);
+        const int32_t q    = int32_t(gc_block.values.q);
+        gc_block.can_mcode = 0;
+        protocol_buffer_synchronize();
+        execute_can_mcode(code, p, q);
+        return Error::Ok;
+    }
+#endif
     // [0. Non-specific/common error-checks and miscellaneous setup]:
     // NOTE: If no line number is present, the value is zero.
     gc_state.line_number     = gc_block.values.n;

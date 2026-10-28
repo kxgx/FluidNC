@@ -166,3 +166,27 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
    single motor a small amount in both directions and confirm the sign
    convention; this is a known open item (see the code review report).
 
+
+## G-code commands (M150..M159)
+
+The CAN subsystem is only initialised when at least one `pd42s1` motor is
+configured; without one, the bus/worker are not started and these commands
+log `no PD42S1 motor configured`.  The same functions are also available as
+`$CAN...` report commands.
+
+| M-code | Action |
+| --- | --- |
+| M150 | CAN scan (transceiver/TWAI + version read of addresses 1..8) |
+| M151 | multi-baud recovery scan (`$CANScan=all`) |
+| M152 | bus status (`$CANStatus`) |
+| M153 | per-driver status/stall/enable/in-position (`$CANFaults`) |
+| M154 | per-driver position/error/speed/in-position (`$CANPos`) |
+| M155 | release stall protection (0xF9, per address) |
+| M156 | broadcast + addressed `0x6F=0` (enable command echo) |
+| M157 | immediate stop (0xFC broadcast; clear the state afterwards) |
+| M158 | restart drivers (0x02 broadcast, bench recovery only) |
+| M159 | raw read; `M159 P<address> Q<function>` e.g. `M159 P1 Q44` (0x2C) |
+
+M150..M159 use the reserved M100..M199 user-code modal group.  They return
+`ok` immediately after the CAN operation; do not combine them with motion
+words in the same block.

@@ -27,7 +27,7 @@
 namespace MotorDrivers {
     class Pd42s1Motor final : public MotorDriver, public Machine::CanBusClient {
     public:
-        Pd42s1Motor(const char* name) : MotorDriver(name) {}
+        Pd42s1Motor(const char* name) : MotorDriver(name) { Machine::CanBus::mark_driver_configured(); }
 
         // MotorDriver overrides
         void init() override;
