@@ -711,20 +711,14 @@ namespace Machine {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
 
-        // Broadcast first: every powered driver executes it without replying.
-        size_t len = Pd42s1Protocol::build_clear_state_command(0, request, sizeof(request));
-        if (len) {
-            log_info("CAN: clearing driver abnormal state (0xFB broadcast)");
-            send_message(request, len, 50);
-            vTaskDelay(pdMS_TO_TICKS(5));
-        }
-        flush_receive();
-
-        // Then ask each address individually, both to cover drivers that
-        // ignore broadcast frames and to report how many answered.
+        // 0xF9 releases the stall protection.  Unlike 0xFB it does not clear
+        // the enable/brake state; in testing on firmware V1.6 a broadcast
+        // 0xFB made all four drivers stop answering until they were power
+        // cycled, so this command deliberately avoids 0xFB and broadcast.
+        log_info("CAN: releasing stall protection (0xF9) on addresses 1..8");
         int acked = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
-            len = Pd42s1Protocol::build_clear_state_command(address, request, sizeof(request));
+            size_t len = Pd42s1Protocol::build_clear_stall_command(address, request, sizeof(request));
             for (int attempt = 0; attempt < 2; ++attempt) {
                 size_t responseLen = 0;
                 if (transact(request, len, response, sizeof(response), responseLen, 50) &&
@@ -734,7 +728,37 @@ namespace Machine {
                 }
             }
         }
-        log_info("CAN: 0xFB clear-state acknowledged by " << acked << " address(es)");
+        log_info("CAN: 0xF9 stall-release acknowledged by " << acked << " address(es)");
+    }
+
+    void CanBus::restart_drivers() {
+        if (!_ready) {
+            log_info("CAN reset: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_RESTART, nullptr, 0, request, sizeof(request));
+        if (!len) {
+            return;
+        }
+        log_info("CAN: broadcasting driver reset (0x02)");
+        send_message(request, len, 100);
+        flush_receive();
+
+        // Give the driver firmware time to boot and re-initialise its CAN
+        // controller before trying to talk to it again.
+        vTaskDelay(pdMS_TO_TICKS(2500));
+        flush_receive();
+
+        send_echo_state_forced(true);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        for (uint8_t address = 1; address <= 8; ++address) {
+            enable_driver_echo_locked(address);
+        }
+        flush_receive();
+        log_info("CAN: driver reset done, command echo re-enabled; run $CANScan");
     }
 
     void CanBus::worker() {

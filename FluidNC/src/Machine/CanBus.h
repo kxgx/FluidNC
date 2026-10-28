@@ -123,6 +123,10 @@ namespace Machine {
         // motors; the normal motor sync will re-enable them when needed.
         void clear_driver_faults();
 
+        // Broadcasts the PD42S1 reset command (0x02) to recover a driver that
+        // stopped answering, waits for it to boot, then re-enables echo.
+        void restart_drivers();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();

@@ -43,6 +43,7 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_READ_VERSION     = 0x20;
         static constexpr uint8_t FUNC_READ_POSITION    = 0x2A;
         static constexpr uint8_t FUNC_READ_STATUS      = 0x2C;
+        static constexpr uint8_t FUNC_RESTART          = 0x02;  // reset/reboot the driver
         static constexpr uint8_t FUNC_SET_ECHO         = 0x6F;
         static constexpr uint8_t FUNC_CLEAR_STALL      = 0xF9;  // clear stall protection
         static constexpr uint8_t FUNC_SET_MOTOR_ENABLE = 0xFA;

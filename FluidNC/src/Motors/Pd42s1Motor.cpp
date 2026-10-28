@@ -198,11 +198,13 @@ namespace MotorDrivers {
         size_t  responseLen = 0;
         uint8_t address     = uint8_t(_address);
 
-        // 0xFB clears the driver's stall, brake and disabled state.
-        size_t len = Pd42s1Protocol::build_clear_state_command(address, request, sizeof(request));
+        // 0xF9 releases the stall protection; 0xFB is deliberately avoided
+        // because a broadcast 0xFB made the V1.6 drivers stop answering in
+        // bench testing.
+        size_t len = Pd42s1Protocol::build_clear_stall_command(address, request, sizeof(request));
         if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
             !Pd42s1Protocol::parse_ack(response, responseLen)) {
-            warn_throttled(now_ms(), "clearing abnormal state failed");
+            warn_throttled(now_ms(), "clearing stall protection failed");
             return false;
         }
 
@@ -222,7 +224,7 @@ namespace MotorDrivers {
         _targetDirty   = true;
         _disabled      = false;
         _online        = true;
-        log_info("CAN: " << name() << " abnormal state cleared (0xFB), motor re-enabled");
+        log_info("CAN: " << name() << " stall protection released (0xF9), motor re-enabled");
         return true;
     }
 

@@ -1295,6 +1295,15 @@ static Error can_clear(const char* value, AuthenticationLevel auth_level, Channe
     return Error::Ok;
 }
 
+static Error can_reset(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN reset: no can: section configured");
+        return Error::Ok;
+    }
+    config->_can->restart_drivers();
+    return Error::Ok;
+}
+
 #    if defined(ESP32)
 // Brute-force search for a CAN transceiver: for every candidate pin, pull it
 // low and watch every other candidate pin.  A transceiver's R output follows
@@ -1392,6 +1401,7 @@ void make_user_commands() {
     new ReportCommand("CANEchoOn", "System/CANEchoOn", can_echo_on, anyState);
     new ReportCommand("CANStatus", "System/CANStatus", can_status, anyState);
     new ReportCommand("CANClear", "System/CANClear", can_clear, anyState);
+    new ReportCommand("CANReset", "System/CANReset", can_reset, anyState);
 #    if defined(ESP32)
     new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
 #    endif
