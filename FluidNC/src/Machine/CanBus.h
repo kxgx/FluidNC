@@ -97,6 +97,12 @@ namespace Machine {
         // Useful when the drivers' CAN bit rate is not known.
         int scan_all_bauds();
 
+        // Broadcasts the PD42S1 "command echo" setting (0x6F) to all drivers:
+        // true = enable replies, false = disable replies.  Takes the
+        // transaction lock internally; do not call it while already holding a
+        // Lock.  Broadcast commands are executed but never answered.
+        void set_driver_echo(bool enable);
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();
@@ -125,7 +131,8 @@ namespace Machine {
         bool        install_driver();
         void        start_worker();
         bool        test_transceiver();
-        void        send_echo_enable();
+        void        send_echo_state(bool enable);          // caller must hold the Lock
+        void        send_echo_state_forced(bool enable);   // caller must hold the Lock
         int         scan_addresses();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
         bool        transact(
@@ -149,6 +156,10 @@ namespace Machine {
         uint32_t      _last_state_check_ms  = 0;
         CanBusClient* _clients[MAX_CLIENTS] = { nullptr };
         size_t        _n_clients            = 0;
+
+        // Last echo state we configured on the drivers; avoids re-sending the
+        // broadcast (and flooding the log) when several motors re-sync.
+        bool _echo_state = false;
 
         // Pacing between logical instructions.  _message_sent distinguishes
         // "no message yet" (so the first message after boot is not delayed)

@@ -183,6 +183,11 @@ namespace MotorDrivers {
         size_t  responseLen = 0;
         uint8_t address     = uint8_t(_address);
 
+        // Reading the driver requires command echo to be enabled.  A scan
+        // command leaves echo off when it finishes, so every sync re-enables
+        // it; normal operation then keeps it on for the acknowledged writes.
+        _bus->set_driver_echo(true);
+
         size_t  len             = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
         uint8_t firmwareVersion = 0;
         uint8_t hardwareVersion = 0;
@@ -245,6 +250,7 @@ namespace MotorDrivers {
             log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
         } else {
             _online = false;
+            _synced = false;  // resync re-enables command echo and retries
             warn_throttled(nowMs, "motor enable/disable command failed");
         }
     }
@@ -258,6 +264,7 @@ namespace MotorDrivers {
             uint8_t(_address), uint8_t(_accel), uint16_t(_speedRpm), target, request, sizeof(request));
         if (!transact(request, len, response, sizeof(response), responseLen, timeoutMs) || !Pd42s1Protocol::parse_ack(response, responseLen)) {
             _online = false;
+            _synced = false;  // resync re-enables command echo and retries
             // Retry even if the target has not changed: the driver may have
             // missed this command, and while the machine is idle there will be
             // no new target to trigger another update.
@@ -286,6 +293,7 @@ namespace MotorDrivers {
             log_verbose("CAN: " << name() << " driver position:" << position << " target:" << int32_t(_lastTarget));
         } else {
             _online = false;
+            _synced = false;  // resync re-enables command echo
             warn_throttled(now_ms(), "position readback failed");
         }
     }

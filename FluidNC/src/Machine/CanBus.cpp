@@ -409,22 +409,42 @@ namespace Machine {
         return true;
     }
 
-    void CanBus::send_echo_enable() {
-        // Broadcast (address 0) "set command echo = acknowledge" (0x6F = 0).
-        // Broadcast commands are executed but not answered, so this can
-        // re-enable responses on a driver that was left at 0x6F = 1 without
-        // needing to know whether it answers.  It also tells whether any node
-        // is electrically present: a present receiver ACKs the frame even if
-        // it does not send a response.
+    void CanBus::send_echo_state(bool enable) {
+        if (_echo_state == enable) {
+            return;  // already configured, no need to retransmit or log
+        }
+        // Broadcast (address 0) "set command echo" (0x6F).  Broadcast
+        // commands are executed but not answered, so this works even when the
+        // drivers are currently set to not reply.  A present receiver ACKs
+        // the frame at the CAN level regardless of its echo setting.
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t echo = 0;  // 0 = acknowledge commands
+        uint8_t echo = enable ? 0 : 1;
         size_t  len  = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
         if (len) {
-            log_info("CAN scan: enabling command echo (broadcast 0x6F=0)");
-            send_message(request, len, 50);
+            log_info("CAN: " << (enable ? "enabling" : "disabling") << " command echo (broadcast 0x6F=" << int(echo) << ")");
+            if (send_message(request, len, 50)) {
+                _echo_state = enable;
+            }
             vTaskDelay(pdMS_TO_TICKS(2));
         }
         flush_receive();
+    }
+
+    void CanBus::send_echo_state_forced(bool enable) {
+        // The scan must transmit the echo setting every time, even when the
+        // cached state says it is already correct: a driver may have missed an
+        // earlier broadcast (for example because another driver was not
+        // powered at that moment).
+        _echo_state = !enable;
+        send_echo_state(enable);
+    }
+
+    void CanBus::set_driver_echo(bool enable) {
+        if (!_ready) {
+            return;
+        }
+        Lock lock(*this);
+        send_echo_state(enable);
     }
 
     int CanBus::scan_address(uint8_t address, uint32_t timeout_ms) {
@@ -459,24 +479,33 @@ namespace Machine {
             return 0;
         }
 
-        Lock lock(*this);
+        int found = 0;
+        {
+            Lock lock(*this);
 
-        twai_status_info_t status;
-        if (twai_get_status_info(&status) == ESP_OK) {
-            log_info("CAN scan: state=" << twai_state_name(status.state) << " tx_err=" << status.tx_error_counter
-                                        << " rx_err=" << status.rx_error_counter << " bus_errors=" << status.bus_error_count);
+            // The requirement for a read is: enable command echo first.
+            send_echo_state_forced(true);
+
+            twai_status_info_t status;
+            if (twai_get_status_info(&status) == ESP_OK) {
+                log_info("CAN scan: state=" << twai_state_name(status.state) << " tx_err=" << status.tx_error_counter
+                                            << " rx_err=" << status.rx_error_counter << " bus_errors=" << status.bus_error_count);
+            }
+
+            // Discard any frames that are still queued from earlier transactions.
+            flush_receive();
+
+            uint32_t tecBefore = twai_tx_error_counter();
+            found              = scan_addresses();
+            uint32_t tecAfter  = twai_tx_error_counter();
+            log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
+                                      << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
+                                                                 : " (no ACK - check driver power, wiring and bit rate)"));
+
+            // ... and disable command echo again when the read is finished.
+            send_echo_state_forced(false);
         }
 
-        // Discard any frames that are still queued from earlier transactions.
-        flush_receive();
-
-        uint32_t tecBefore = twai_tx_error_counter();
-        send_echo_enable();
-        int      found    = scan_addresses();
-        uint32_t tecAfter = twai_tx_error_counter();
-        log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
-                                  << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
-                                                             : " (no ACK - check driver power, wiring and bit rate)"));
         return found;
     }
 
@@ -525,12 +554,15 @@ namespace Machine {
                 log_info("CAN scan at " << baud << " baud:");
                 flush_receive();
                 uint32_t tecBefore = twai_tx_error_counter();
-                send_echo_enable();
+                send_echo_state_forced(true);
                 total += scan_addresses();
                 uint32_t tecAfter = twai_tx_error_counter();
                 log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
                                           << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
                                                                      : " (no ACK - check driver power, wiring and bit rate)"));
+                // Leave the drivers in the requested "no unsolicited replies"
+                // state after every rate, including the last one.
+                send_echo_state_forced(false);
                 twai_stop();
                 twai_driver_uninstall();
                 _ready = false;
