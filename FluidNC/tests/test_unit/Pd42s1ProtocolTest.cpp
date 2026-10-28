@@ -221,3 +221,27 @@ TEST(Pd42s1Protocol, ParsesSpeedAndPositionError) {
     EXPECT_TRUE(Pd42s1Protocol::parse_int32_value(error, sizeof(error), Pd42s1Protocol::FUNC_READ_POS_ERROR, err));
     EXPECT_EQ(err, 1);
 }
+
+TEST(Pd42s1Protocol, BuildsCanBaudCommand) {
+    // Manual 4.3.28: C5 01 68 01 F4 23 5C sets 500 kbps.
+    std::array<uint8_t, Pd42s1Protocol::MAX_FRAME_LEN> frame {};
+    size_t len = Pd42s1Protocol::build_set_can_baud_command(1, 500, frame.data(), frame.size());
+    ASSERT_EQ(len, 7u);
+    EXPECT_EQ(frame[0], 0xC5);
+    EXPECT_EQ(frame[1], 1);
+    EXPECT_EQ(frame[2], Pd42s1Protocol::FUNC_SET_CAN_BAUD);
+    EXPECT_EQ(frame[3], 0x01);
+    EXPECT_EQ(frame[4], 0xF4);
+    EXPECT_EQ(frame[5], 0x23);
+    EXPECT_EQ(frame[6], 0x5C);
+}
+
+TEST(Pd42s1Protocol, BuildsSaveParamsCommand) {
+    // Manual example: C5 01 04 CA 5C.
+    std::array<uint8_t, Pd42s1Protocol::MAX_FRAME_LEN> frame {};
+    size_t len = Pd42s1Protocol::build_save_params_command(1, frame.data(), frame.size());
+    ASSERT_EQ(len, 5u);
+    EXPECT_EQ(frame[2], Pd42s1Protocol::FUNC_SAVE_PARAMS);
+    EXPECT_EQ(frame[3], 0xCA);
+    EXPECT_EQ(frame[4], 0x5C);
+}

@@ -259,12 +259,11 @@ namespace MotorDrivers {
         bool    ok              = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
                      Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
         if (!ok) {
-            // A driver that was left at 0x6F = 1 never answers.  Re-enable
-            // echo on this address once, wait for it to take effect, and try
-            // again.  This is the only 0x6F traffic in the normal motor path;
-            // the vendor example simply assumes the factory default.
-            _bus->enable_driver_echo(address);
-            vTaskDelay(pdMS_TO_TICKS(20));
+            // Auto-configuration leaves command echo disabled, but normal
+            // control needs acknowledgments.  Re-enable echo (throttled so a
+            // few silent motors cannot flood the bus) and retry the read.
+            _bus->ensure_driver_echo();
+            vTaskDelay(pdMS_TO_TICKS(30));
             ok = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
                  Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
         }

@@ -38,6 +38,10 @@ namespace Machine {
         // transactions here; it must not hold a CanBus::Lock across calls.
         virtual void can_poll(uint32_t now_ms) = 0;
 
+        // Slave address used to detect duplicate configured addresses; 0 for
+        // clients that do not use a PD42S1-style address.
+        virtual uint8_t bus_address() const { return 0; }
+
         virtual ~CanBusClient() = default;
     };
 
@@ -67,7 +71,9 @@ namespace Machine {
         // bus, worker and all $CAN.../M15x commands are gated on this so a
         // machine without a pd42s1 motor never starts the CAN subsystem.
         static void mark_driver_configured();
+        static void unmark_driver_configured();
         static bool driver_configured();
+        static int  configured_driver_count();
         bool        enabled() const { return _driver_configured; }
 
         uint32_t command_id() const { return _command_id; }
@@ -150,6 +156,20 @@ namespace Machine {
         // for exploring function codes that do not have a dedicated command.
         void read_raw(uint8_t address, uint8_t function);
 
+        // Stops all CAN motion control (worker stops polling clients) and
+        // warns.  Used when the configuration contains duplicate PD42S1
+        // addresses; diagnostics remain available.
+        void inhibit_control(const char* reason);
+        bool inhibited() const { return _inhibited; }
+
+        // Runs the CAN baud/parameter auto-configuration on demand.
+        bool run_auto_config();
+
+        // Best-effort, throttled re-enable of command echo for normal motor
+        // control (used after auto-config leaves echo off or a driver missed
+        // it); avoids flooding the bus when several motors retry.
+        void ensure_driver_echo();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();
@@ -180,6 +200,10 @@ namespace Machine {
         void        start_worker();
         bool        test_transceiver();
         void        enable_echoes_at_startup();
+        bool        auto_configure_drivers();
+        bool        probe_address_quiet(uint8_t address, uint8_t& firmware, uint8_t& hardware, uint32_t timeout_ms, int attempts);
+        void        set_echo_to_address_locked(uint8_t address, bool enable);
+        void        disable_all_driver_echo_locked();
         bool        send_echo_state(bool enable);          // caller must hold the Lock
         bool        send_echo_state_forced(bool enable);   // caller must hold the Lock
         bool        enable_driver_echo_locked(uint8_t address);  // caller must hold the Lock
@@ -198,6 +222,7 @@ namespace Machine {
         uint32_t _command_id = 0x1000;
 
         static bool _driver_configured;
+        static int  _driver_count;
 
         bool              _ready          = false;
         SemaphoreHandle_t _bus_mutex      = nullptr;
@@ -215,6 +240,11 @@ namespace Machine {
         // Last echo state we configured on the drivers; avoids re-sending the
         // broadcast (and flooding the log) when several motors re-sync.
         bool _echo_state = false;
+
+        // Set when duplicate PD42S1 addresses make control unsafe.
+        bool        _inhibited       = false;
+        const char* _inhibit_reason  = nullptr;
+        uint32_t    _last_all_echo_ms = 0;
 
         // Pacing between logical instructions.  _message_sent distinguishes
         // "no message yet" (so the first message after boot is not delayed)

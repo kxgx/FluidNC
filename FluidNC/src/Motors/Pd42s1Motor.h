@@ -28,6 +28,7 @@ namespace MotorDrivers {
     class Pd42s1Motor final : public MotorDriver, public Machine::CanBusClient {
     public:
         Pd42s1Motor(const char* name) : MotorDriver(name) { Machine::CanBus::mark_driver_configured(); }
+        ~Pd42s1Motor() override { Machine::CanBus::unmark_driver_configured(); }
 
         // MotorDriver overrides
         void init() override;
@@ -37,7 +38,8 @@ namespace MotorDrivers {
         void validate() override;
 
         // CanBusClient override -- called from the CAN worker task.
-        void can_poll(uint32_t now_ms) override;
+        void    can_poll(uint32_t now_ms) override;
+        uint8_t bus_address() const override { return uint8_t(_address); }
 
         // Step ISR entry points.  These are non-virtual and IRAM_ATTR for the
         // same reason as UnipolarMotor's: the linker puts virtual function

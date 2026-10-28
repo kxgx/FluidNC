@@ -50,6 +50,8 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_READ_SPEED       = 0x29;
         static constexpr uint8_t FUNC_READ_POS_ERROR   = 0x2B;
         static constexpr uint8_t FUNC_RESTART          = 0x02;  // reset/reboot the driver
+        static constexpr uint8_t FUNC_SAVE_PARAMS      = 0x04;  // save parameters to NVRAM
+        static constexpr uint8_t FUNC_SET_CAN_BAUD     = 0x68;  // new CAN bit rate in kbps
         static constexpr uint8_t FUNC_SET_ECHO         = 0x6F;
         static constexpr uint8_t FUNC_CLEAR_STALL      = 0xF9;  // clear stall protection
         static constexpr uint8_t FUNC_SET_MOTOR_ENABLE = 0xFA;
@@ -86,6 +88,12 @@ namespace MotorDrivers {
         // Builds the immediate-brake command (0xFC).  The manual warns that
         // the motor can get hot if the state is not cleared afterwards.
         static size_t build_stop_now_command(uint8_t address, uint8_t* out, size_t out_size);
+
+        // Builds the CAN bit-rate command (0x68, value in kbps, e.g. 1000).
+        static size_t build_set_can_baud_command(uint8_t address, uint16_t kbps, uint8_t* out, size_t out_size);
+
+        // Builds the parameter-save command (0x04).
+        static size_t build_save_params_command(uint8_t address, uint8_t* out, size_t out_size);
 
         // Builds a command with no data payload, e.g. a read command.
         static size_t build_read_command(uint8_t address, uint8_t function, uint8_t* out, size_t out_size);

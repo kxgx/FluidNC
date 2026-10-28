@@ -68,6 +68,15 @@ namespace MotorDrivers {
         return build_frame(address, FUNC_STOP_NOW, nullptr, 0, out, out_size);
     }
 
+    size_t Pd42s1Protocol::build_set_can_baud_command(uint8_t address, uint16_t kbps, uint8_t* out, size_t out_size) {
+        uint8_t data[2] = { uint8_t(kbps >> 8), uint8_t(kbps & 0xFF) };
+        return build_frame(address, FUNC_SET_CAN_BAUD, data, sizeof(data), out, out_size);
+    }
+
+    size_t Pd42s1Protocol::build_save_params_command(uint8_t address, uint8_t* out, size_t out_size) {
+        return build_frame(address, FUNC_SAVE_PARAMS, nullptr, 0, out, out_size);
+    }
+
     size_t Pd42s1Protocol::build_read_command(uint8_t address, uint8_t function, uint8_t* out, size_t out_size) {
         return build_frame(address, function, nullptr, 0, out, out_size);
     }
@@ -112,7 +121,10 @@ namespace MotorDrivers {
             case FUNC_CLEAR_STALL:
             case FUNC_CLEAR_STATE:
             case FUNC_STOP_NOW:
+            case FUNC_SAVE_PARAMS:
                 return 6;  // status only
+            case FUNC_SET_CAN_BAUD:
+                return 8;  // status + 2-byte bit rate in kbps
             case FUNC_POSITION_MODE:
                 return 6;  // status only
             default:

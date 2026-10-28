@@ -67,6 +67,9 @@ static void execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
             }
             can->read_raw(uint8_t(p), uint8_t(q));
             break;
+        case 160:
+            can->run_auto_config();
+            break;
         default:
             log_info("CAN: unknown M" << int(code));
             break;
@@ -973,11 +976,12 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                         mg_word_bit    = ModalGroup::MM11;
                         break;
 #if MAX_N_CAN
-                    // M150..M159: CAN diagnostic/control commands.
+                    // M150..M160: CAN diagnostic/control commands.
                     // 150 scan, 151 scan all bauds, 152 bus status,
                     // 153 driver faults, 154 driver positions,
                     // 155 release stall, 156 echo on, 157 immediate stop,
-                    // 158 restart drivers, 159 raw read (P=addr, Q=func).
+                    // 158 restart drivers, 159 raw read (P=addr, Q=func),
+                    // 160 auto-configure driver baud/echo.
                     case 150:
                     case 151:
                     case 152:
@@ -988,6 +992,7 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                     case 157:
                     case 158:
                     case 159:
+                    case 160:
                         gc_block.can_mcode = uint8_t(int_value);
                         mg_word_bit        = ModalGroup::MM10;
                         break;

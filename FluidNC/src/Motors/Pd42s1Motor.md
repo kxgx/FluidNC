@@ -106,9 +106,10 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
 3. The controller transmits on extended ID `0x1000`; the PD42S1 accepts IDs in
    `0x1000..0x100F` only.  `can: command_id` is validated against that range.
 4. Leave command echo (`0x6F`) at 0 (acknowledge).  With `0x6F = 1` the driver
-   stops replying.  At boot the firmware sends `0x6F = 0` once (broadcast then
-   each address 1..8); after hot-plugging/powering a driver later, run
-   `$CANEchoOn` manually.  Normal motor transactions do not carry 0x6F traffic.
+   stops replying.  At boot the firmware enables echo, verifies every
+   configured driver and then closes echo again; normal motor sync re-enables
+   it when acknowledgments are needed.  After hot-plugging/powering a driver
+   later, run `$CANEchoOn` manually.
 5. Bus wiring: twisted CANH/CANL pair, 120 ohm at the two physical ends only,
    common ground.  The SN65HVD230 `Rs` pin must be tied to GND for high-speed
    mode (or through 10k..100k for slope control).
@@ -139,6 +140,9 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
      stopped / done / running / overload / stall / undervoltage), stall flag
      (0x2D), enable state (0x2F) and in-position flag (0x30); prints a warning
      summary when overload/stall/undervoltage is seen.
+   * `$CANAutoConfig` -- probe all driver rates, change the drivers to
+     `can: baud` (broadcast `0x68` + save `0x04`), confirm every configured
+     motor and close echo again.  Also runs automatically at boot.
    * `$CANPos` -- read actual position (0x2A), position error (0x2B), speed
      (0x29) and in-position flag (0x30) for every answering driver.
    * `$CANStop` -- broadcast the immediate-brake command (0xFC); this stops all
@@ -167,7 +171,30 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
    convention; this is a known open item (see the code review report).
 
 
-## G-code commands (M150..M159)
+## CAN bit rate auto-configuration
+
+`can: baud` is both the host rate and the target rate for the drivers.  At
+boot the firmware:
+
+1. probes every PD42S1 rate (125k/250k/500k/1 Mbps) with echo enabled,
+2. if drivers answer at another rate, broadcasts `0x68` (new rate in kbps) at
+   that rate, then broadcasts `0x04` (save) at the configured rate,
+3. confirms that every configured `pd42s1` motor answers at the configured
+   rate; on a mismatch it warns and leaves echo enabled,
+4. on full success disables echo again (motor sync re-enables it before
+   streaming).
+
+`$CANAutoConfig` / `M160` runs the same procedure on demand; it suspends the
+CAN worker while probing and restarts it afterwards.
+
+**Duplicate addresses**: if two configured `pd42s1` motors use the same
+`address`, CAN control is inhibited immediately after startup, the drivers are
+sent a broadcast disable and `$CANStatus` reports
+`CAN control inhibited: duplicate PD42S1 address`.  Fix the addresses and
+restart.  (Two physical drivers set to the same address while the config uses
+unique addresses cannot be detected reliably by this protocol.)
+
+## G-code commands (M150..M160)
 
 The CAN subsystem is only initialised when at least one `pd42s1` motor is
 configured; without one, the bus/worker are not started and these commands
@@ -186,6 +213,7 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 | M157 | immediate stop (0xFC broadcast; clear the state afterwards) |
 | M158 | restart drivers (0x02 broadcast, bench recovery only) |
 | M159 | raw read; `M159 P<address> Q<function>` e.g. `M159 P1 Q44` (0x2C) |
+| M160 | run CAN bit-rate/echo auto-configuration |
 
 M150..M159 use the reserved M100..M199 user-code modal group.  They return
 `ok` immediately after the CAN operation; do not combine them with motion
