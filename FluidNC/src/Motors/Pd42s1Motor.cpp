@@ -14,6 +14,7 @@
 #    include <esp_timer.h>
 
 #    include <cmath>
+#    include <cstdio>
 #    include <cstring>
 
 using namespace Machine;
@@ -114,39 +115,66 @@ namespace MotorDrivers {
         }
 
         CanBus::Lock lock(*_bus);
+
+        // Start from a clean receive queue: a leftover byte from an earlier
+        // timed-out transaction would otherwise look like the start of this
+        // response, and a stale frame could even carry the expected length.
+        _bus->flush_receive();
         if (!_bus->send_message(request, requestLen, timeoutMs)) {
+            _bus->flush_receive();
+            _bus->flush_transmit();
             return false;
         }
 
         const uint32_t deadline = now_ms() + timeoutMs;
         size_t         total    = 0;
+        bool           complete = false;
         while (true) {
             uint32_t now = now_ms();
             if (int32_t(deadline - now) <= 0) {
-                return false;
+                break;
             }
             if (total >= responseCapacity) {
-                return false;
+                break;
             }
 
             size_t received = _bus->receive_chunk(response + total, responseCapacity - total, deadline - now);
             if (received == 0) {
-                return false;
+                break;
             }
             total += received;
 
             size_t expected = Pd42s1Protocol::expected_response_length(response, total);
             if (expected == SIZE_MAX) {
-                return false;
+                break;
             }
             if (expected != 0 && total >= expected) {
-                if (total != expected) {
-                    return false;
-                }
-                responseLen = total;
-                return Pd42s1Protocol::valid_response(response, total);
+                complete = (total == expected);
+                break;
             }
         }
+
+        bool ok = false;
+        if (complete && Pd42s1Protocol::valid_response(response, total) && response[1] == request[1] && response[2] == request[2]) {
+            if (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6) {
+                // The driver answered but rejected the command.  Report the
+                // manual's error code (0xE1..0xE6) instead of letting it hide
+                // behind the generic "not acknowledged" warnings.
+                char message[32];
+                snprintf(message, sizeof(message), "command error 0x%02X", response[3]);
+                warn_throttled(now_ms(), message);
+            } else {
+                ok = true;
+            }
+        }
+
+        if (!ok) {
+            _bus->flush_receive();
+            _bus->flush_transmit();
+            return false;
+        }
+        responseLen = total;
+        return true;
     }
 
     bool Pd42s1Motor::sync() {

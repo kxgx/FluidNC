@@ -94,8 +94,10 @@ namespace Machine {
         // @default 0x1000
         // @tuning per-machine
         // 29-bit extended CAN ID used for frames sent by the controller.  The
-        // vendor's CAN examples use 0x1000, which is the PD42S1 default.  Only
-        // change this if the drivers were reprogrammed with command ID 0x6C.
+        // vendor's CAN examples use 0x1000, which is the PD42S1 default.  The
+        // driver only accepts IDs in 0x1000..0x100F; validate() enforces that.
+        // Only change this if the drivers were reprogrammed with command ID
+        // 0x6C.
         handler.item("command_id", _command_id);
     }
 
@@ -108,6 +110,7 @@ namespace Machine {
         Assert(_baud == 125000 || _baud == 250000 || _baud == 500000 || _baud == 1000000,
                "CAN baud must be 125000, 250000, 500000 or 1000000");
         Assert(_command_id <= 0x1FFFFFFF, "CAN command_id must fit in 29 bits");
+        Assert((_command_id & 0xFFFFFFF0u) == 0x1000u, "CAN command_id must be in 0x1000..0x100F for PD42S1");
     }
 
     void CanBus::init() {
@@ -275,6 +278,20 @@ namespace Machine {
         if (!_ready) {
             return false;
         }
+
+        // PD42S1 manual section 4.1 item 7: at least MIN_INSTRUCTION_GAP_MS
+        // between two complete instructions.  One call here is one complete
+        // instruction, so the wait belongs before the first frame; the frames
+        // below are still queued back-to-back.  This runs in task context (the
+        // CAN worker or the main task), never in an ISR.
+        if (_message_sent) {
+            uint32_t elapsed = now_ms() - _last_message_end_ms;
+            if (elapsed < MIN_INSTRUCTION_GAP_MS) {
+                vTaskDelay(pdMS_TO_TICKS(MIN_INSTRUCTION_GAP_MS - elapsed));
+            }
+        }
+
+        bool   ok     = true;
         size_t offset = 0;
         while (offset < len) {
             size_t chunk = len - offset;
@@ -290,11 +307,15 @@ namespace Machine {
 
             esp_err_t err = twai_transmit(&message, pdMS_TO_TICKS(timeout_ms));
             if (err != ESP_OK) {
-                return false;
+                ok = false;
+                break;
             }
             offset += chunk;
         }
-        return true;
+
+        _last_message_end_ms = now_ms();
+        _message_sent        = true;
+        return ok;
     }
 
     size_t CanBus::receive_chunk(uint8_t* buf, size_t max_len, uint32_t timeout_ms) {
@@ -317,42 +338,70 @@ namespace Machine {
         return len;
     }
 
+    void CanBus::flush_receive() {
+        if (_ready) {
+            twai_clear_receive_queue();
+        }
+    }
+
+    void CanBus::flush_transmit() {
+        if (_ready) {
+            twai_clear_transmit_queue();
+        }
+    }
+
     bool CanBus::transact(
         const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs) {
+        // The caller (scan) holds Lock, so no other transaction can be in
+        // flight while the queues are flushed.
         responseLen = 0;
         if (!_ready || requestLen == 0) {
             return false;
         }
+
+        flush_receive();
         if (!send_message(request, requestLen, timeoutMs)) {
+            flush_receive();
+            flush_transmit();
             return false;
         }
 
         const uint32_t deadline = now_ms() + timeoutMs;
         size_t         total    = 0;
+        bool           complete = false;
         while (total < responseCapacity) {
             int32_t remaining = int32_t(deadline - now_ms());
             if (remaining <= 0) {
-                return false;
+                break;
             }
             size_t received = receive_chunk(response + total, responseCapacity - total, uint32_t(remaining));
             if (received == 0) {
-                return false;
+                break;
             }
             total += received;
 
             size_t expected = Pd42s1Protocol::expected_response_length(response, total);
             if (expected == SIZE_MAX) {
-                return false;
+                break;
             }
             if (expected != 0 && total >= expected) {
-                if (total != expected) {
-                    return false;
-                }
-                responseLen = total;
-                return Pd42s1Protocol::valid_response(response, total);
+                complete = (total == expected);
+                break;
             }
         }
-        return false;
+
+        // The framing must be intact, the answer must come from the slave we
+        // addressed and carry the function code we asked for, and a 6-byte
+        // frame with a 0xE1..0xE6 status is a command error, not a success.
+        if (!complete || !Pd42s1Protocol::valid_response(response, total) || response[1] != request[1] || response[2] != request[2] ||
+            (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6)) {
+            flush_receive();
+            flush_transmit();
+            return false;
+        }
+
+        responseLen = total;
+        return true;
     }
 
     int CanBus::scan_address(uint8_t address, uint32_t timeout_ms) {
@@ -396,9 +445,7 @@ namespace Machine {
         }
 
         // Discard any frames that are still queued from earlier transactions.
-        uint8_t scratch[TWAI_FRAME_MAX_DLC];
-        while (receive_chunk(scratch, sizeof(scratch), 0) > 0) {
-        }
+        flush_receive();
 
         int found = 0;
         for (uint8_t address = 1; address <= 8; ++address) {

@@ -47,6 +47,12 @@ namespace Machine {
 
         static constexpr size_t MAX_CLIENTS = 8;
 
+        // PD42S1 manual section 4.1 item 7: two complete instructions must be
+        // at least this far apart so the driver can finish parsing the first
+        // one.  The frames that make up a single instruction are still sent
+        // back-to-back.
+        static constexpr uint32_t MIN_INSTRUCTION_GAP_MS = 2;
+
         // Installs the TWAI driver and starts the worker task.  Safe to call
         // when no pins are configured; it logs and does nothing in that case.
         void init();
@@ -63,12 +69,22 @@ namespace Machine {
 
         // Splits one logical protocol message into 8-byte CAN data frames and
         // transmits them back-to-back.  Returns false if any frame could not
-        // be queued for transmission.
+        // be queued for transmission.  Waits for MIN_INSTRUCTION_GAP_MS since
+        // the end of the previous message before it transmits the first frame.
+        // Callers must hold the Lock so that the pace is tracked consistently.
         bool send_message(const uint8_t* data, size_t len, uint32_t timeout_ms);
 
         // Waits for the next CAN data frame and copies its payload into buf.
         // Returns the payload length, or 0 when no frame arrived in time.
         size_t receive_chunk(uint8_t* buf, size_t max_len, uint32_t timeout_ms);
+
+        // Discards frames that are still queued in the TWAI receive or
+        // transmit queue.  A transaction uses these to start from a clean
+        // state and to remove a partial response after a failure.  Call them
+        // only while holding the Lock (no transaction in flight), otherwise
+        // they could discard another transaction's frames.
+        void flush_receive();
+        void flush_transmit();
 
         // Sends the PD42S1 "read version" command to addresses 1..8 and logs
         // every device that answers.  Returns the number of responders.
@@ -126,6 +142,12 @@ namespace Machine {
         uint32_t      _last_state_check_ms  = 0;
         CanBusClient* _clients[MAX_CLIENTS] = { nullptr };
         size_t        _n_clients            = 0;
+
+        // Pacing between logical instructions.  _message_sent distinguishes
+        // "no message yet" (so the first message after boot is not delayed)
+        // from a timestamp that happens to be zero.
+        uint32_t _last_message_end_ms = 0;
+        bool     _message_sent        = false;
     };
 }
 
