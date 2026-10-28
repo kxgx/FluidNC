@@ -106,33 +106,39 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
 3. The controller transmits on extended ID `0x1000`; the PD42S1 accepts IDs in
    `0x1000..0x100F` only.  `can: command_id` is validated against that range.
 4. Leave command echo (`0x6F`) at 0 (acknowledge).  With `0x6F = 1` the driver
-   stops replying and every transaction in FluidNC will time out.
+   stops replying.  At boot the firmware sends `0x6F = 0` once (broadcast then
+   each address 1..8); after hot-plugging/powering a driver later, run
+   `$CANEchoOn` manually.  Normal motor transactions do not carry 0x6F traffic.
 5. Bus wiring: twisted CANH/CANL pair, 120 ohm at the two physical ends only,
    common ground.  The SN65HVD230 `Rs` pin must be tied to GND for high-speed
    mode (or through 10k..100k for slope control).
 6. Diagnostics:
    * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters,
-     then, exactly like the vendor CAN example, version reads at addresses
-     1..8 at the configured bit rate (extended frames, accept-all filter,
-     echo left at its factory default "on").  Each address is probed up to
+     then version reads at addresses 1..8 at the configured bit rate (extended
+     frames, accept-all filter, no 0x6F traffic).  Each address is probed up to
      three times (`after retry` in the log).  The reported
      `TWAI tx_err before -> after` tells whether any node ACKed the frames:
      `0 -> 0` means a powered node is present, an increase means nobody ACKed
      (check power, CANH/CANL wiring and bit rate).
    * `$CANScan=all` -- recovery variant: at each rate it first sends
-     `0x6F = 0` to **all** addresses 1..8 (re-enabling command echo on drivers
-     that were left silent), then scans 125k, 250k, 500k and 1 Mbps; restores
-     the configured bit rate and restarts the CAN worker afterwards.  This is
-     the one command that touches 0x6F; the plain `$CANScan` and normal motor
-     traffic leave the setting untouched, as the vendor example does.
+     `0x6F = 0` (broadcast and every address 1..8), then scans 125k, 250k,
+     500k and 1 Mbps; restores the configured bit rate and restarts the CAN
+     worker afterwards.
+   * `$CANEchoOn` -- send `0x6F = 0` once (broadcast + addresses 1..8) without
+     scanning; use it after connecting a new driver.
+   * `$CANStatus` -- TWAI state, tx/rx error counters, bus error count,
+     queue fill, number of bus-off recoveries, configured pins/baud/ID and the
+     cached echo state.
    * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
      each candidate GPIO low.  Bench/debug only: it briefly drives pins that
      may be limit switches, STEP/DIR or enable lines.
 
-> The firmware does **not** change the driver's command-echo setting (0x6F) at
-> run time.  The official example relies on the factory default, echo = on.
-> If a driver was left at "no reply" (`0x6F = 1`), set it back to 0 with the
-> vendor tool; otherwise every transaction to that driver silently times out.
+> Retries and recovery: every protocol transaction (version, position,
+> enable/disable, target) is tried twice before it counts as a failure.  A
+> failed target/readback is retried on the next worker pass; after three
+> consecutive failures the motor is re-synchronised (which also re-enables
+> echo on its address).  The CAN worker checks the TWAI state every 500 ms and
+> recovers automatically from bus-off.
 7. If `$CANScan` reports `transceiver detected` but `(no devices)` and the TWAI
    state is `bus-off`, no other node is acknowledging: check driver power,
    CANH/CANL wiring, termination and the driver's bit rate.

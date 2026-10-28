@@ -177,6 +177,19 @@ namespace MotorDrivers {
         return true;
     }
 
+    bool Pd42s1Motor::transact_retry(
+        const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs, uint8_t attempts) {
+        for (uint8_t attempt = 0; attempt < attempts; ++attempt) {
+            if (transact(request, requestLen, response, responseCapacity, responseLen, timeoutMs)) {
+                return true;
+            }
+            if (attempt + 1 < attempts) {
+                vTaskDelay(pdMS_TO_TICKS(4));
+            }
+        }
+        return false;
+    }
+
     bool Pd42s1Motor::sync() {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -186,21 +199,35 @@ namespace MotorDrivers {
         size_t  len             = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
         uint8_t firmwareVersion = 0;
         uint8_t hardwareVersion = 0;
-        if (!transact(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS) ||
-            !Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion)) {
+        bool    ok              = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
+                     Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
+        if (!ok) {
+            // A driver that was left at 0x6F = 1 never answers.  Re-enable
+            // echo on this address once, wait for it to take effect, and try
+            // again.  This is the only 0x6F traffic in the normal motor path;
+            // the vendor example simply assumes the factory default.
+            _bus->enable_driver_echo(address);
+            vTaskDelay(pdMS_TO_TICKS(20));
+            ok = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
+                 Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
+        }
+        if (!ok) {
+            _readFailures++;
             return false;
         }
 
         len              = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
         int32_t position = 0;
-        if (!transact(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS) ||
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
             !Pd42s1Protocol::parse_position(response, responseLen, position)) {
+            _readFailures++;
             return false;
         }
 
         len = Pd42s1Protocol::build_enable_command(address, true, request, sizeof(request));
-        if (!transact(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS) ||
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
             !Pd42s1Protocol::parse_ack(response, responseLen)) {
+            _writeFailures++;
             return false;
         }
 
@@ -213,6 +240,8 @@ namespace MotorDrivers {
         _disableRequested = false;
         _synced           = true;
         _online           = true;
+        _readFailures     = 0;
+        _writeFailures    = 0;
 
         log_info("CAN: " << name() << " address:" << _address << " online, firmware V" << int(firmwareVersion / 10) << "."
                          << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "." << int(hardwareVersion % 10)
@@ -232,11 +261,12 @@ namespace MotorDrivers {
         bool    disable     = _disableRequested;
 
         size_t len = Pd42s1Protocol::build_enable_command(uint8_t(_address), !disable, request, sizeof(request));
-        if (transact(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS) &&
+        if (transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
             Pd42s1Protocol::parse_ack(response, responseLen)) {
             _disabled       = disable;
             _disablePending = false;
             _online         = true;
+            _writeFailures  = 0;
             if (!disable) {
                 // Re-send the target after enabling so the driver is not left
                 // holding a stale target from before it was disabled.
@@ -245,7 +275,11 @@ namespace MotorDrivers {
             log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
         } else {
             _online = false;
-            _synced = false;  // resync re-enables command echo and retries
+            _writeFailures++;
+            if (_writeFailures >= 3) {
+                _writeFailures = 0;
+                _synced        = false;  // resync re-enables command echo and retries
+            }
             warn_throttled(nowMs, "motor enable/disable command failed");
         }
     }
@@ -257,20 +291,26 @@ namespace MotorDrivers {
 
         size_t len = Pd42s1Protocol::build_position_command(
             uint8_t(_address), uint8_t(_accel), uint16_t(_speedRpm), target, request, sizeof(request));
-        if (!transact(request, len, response, sizeof(response), responseLen, timeoutMs) || !Pd42s1Protocol::parse_ack(response, responseLen)) {
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, timeoutMs, 2) ||
+            !Pd42s1Protocol::parse_ack(response, responseLen)) {
             _online = false;
-            _synced = false;  // resync re-enables command echo and retries
+            _writeFailures++;
             // Retry even if the target has not changed: the driver may have
             // missed this command, and while the machine is idle there will be
             // no new target to trigger another update.
             _targetDirty = true;
             warn_throttled(now_ms(), "position command was not acknowledged");
+            if (_writeFailures >= 3) {
+                _writeFailures = 0;
+                _synced        = false;  // resync (and re-enable echo) after repeated failures
+            }
             return false;
         }
 
-        _lastTarget  = target;
-        _targetDirty = false;
-        _online      = true;
+        _lastTarget   = target;
+        _targetDirty  = false;
+        _online       = true;
+        _writeFailures = 0;
         log_verbose("CAN: " << name() << " target:" << int32_t(target) << " steps:" << _stepCount);
         return true;
     }
@@ -282,14 +322,20 @@ namespace MotorDrivers {
 
         size_t  len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
         int32_t position = 0;
-        if (transact(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS) &&
+        if (transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
             Pd42s1Protocol::parse_position(response, responseLen, position)) {
             _driverPosition = position;
+            _online         = true;
+            _readFailures   = 0;
             log_verbose("CAN: " << name() << " driver position:" << position << " target:" << int32_t(_lastTarget));
         } else {
             _online = false;
-            _synced = false;  // resync re-enables command echo
+            _readFailures++;
             warn_throttled(now_ms(), "position readback failed");
+            if (_readFailures >= 3) {
+                _readFailures = 0;
+                _synced       = false;  // resync (and re-enable echo) after repeated failures
+            }
         }
     }
 

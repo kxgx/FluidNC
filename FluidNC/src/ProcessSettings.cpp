@@ -1277,6 +1277,15 @@ static Error can_echo_on(const char* value, AuthenticationLevel auth_level, Chan
     return Error::Ok;
 }
 
+static Error can_status(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN status: no can: section configured");
+        return Error::Ok;
+    }
+    config->_can->report_status();
+    return Error::Ok;
+}
+
 #    if defined(ESP32)
 // Brute-force search for a CAN transceiver: for every candidate pin, pull it
 // low and watch every other candidate pin.  A transceiver's R output follows
@@ -1372,6 +1381,7 @@ void make_user_commands() {
 #if MAX_N_CAN
     new ReportCommand("CANScan", "System/CANScan", can_scan, anyState);
     new ReportCommand("CANEchoOn", "System/CANEchoOn", can_echo_on, anyState);
+    new ReportCommand("CANStatus", "System/CANStatus", can_status, anyState);
 #    if defined(ESP32)
     new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
 #    endif

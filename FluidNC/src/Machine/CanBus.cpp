@@ -137,6 +137,8 @@ namespace Machine {
         if (!install_driver()) {
             return;
         }
+        _ready = true;
+        enable_echoes_at_startup();
         start_worker();
         log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
     }
@@ -409,9 +411,9 @@ namespace Machine {
         return true;
     }
 
-    void CanBus::send_echo_state(bool enable) {
+    bool CanBus::send_echo_state(bool enable) {
         if (_echo_state == enable) {
-            return;  // already configured, no need to retransmit or log
+            return true;  // already configured, no need to retransmit or log
         }
         // Broadcast (address 0) "set command echo" (0x6F).  Broadcast
         // commands are executed but not answered, so this works even when the
@@ -420,36 +422,40 @@ namespace Machine {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t echo = enable ? 0 : 1;
         size_t  len  = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
+        bool    ok   = false;
         if (len) {
             log_info("CAN: " << (enable ? "enabling" : "disabling") << " command echo (broadcast 0x6F=" << int(echo) << ")");
-            if (send_message(request, len, 50)) {
+            ok = send_message(request, len, 50);
+            if (ok) {
                 _echo_state = enable;
             }
             vTaskDelay(pdMS_TO_TICKS(2));
         }
         flush_receive();
+        return ok;
     }
 
-    void CanBus::send_echo_state_forced(bool enable) {
+    bool CanBus::send_echo_state_forced(bool enable) {
         // The scan must transmit the echo setting every time, even when the
         // cached state says it is already correct: a driver may have missed an
         // earlier broadcast (for example because another driver was not
         // powered at that moment).
         _echo_state = !enable;
-        send_echo_state(enable);
+        return send_echo_state(enable);
     }
 
-    void CanBus::enable_driver_echo_locked(uint8_t address) {
+    bool CanBus::enable_driver_echo_locked(uint8_t address) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t echo = 0;  // 0 = acknowledge commands
         size_t  len  = Pd42s1Protocol::build_frame(address, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
         if (!len) {
-            return;
+            return false;
         }
         log_verbose("CAN: enabling command echo at address " << int(address));
-        send_message(request, len, 50);
+        bool ok = send_message(request, len, 50);
         vTaskDelay(pdMS_TO_TICKS(2));  // let the driver apply the setting
         flush_receive();               // discard its ack if echo was already on
+        return ok;
     }
 
     void CanBus::enable_driver_echo(uint8_t address) {
@@ -480,6 +486,28 @@ namespace Machine {
         Lock lock(*this);
         enable_all_driver_echo_locked();
         log_info("CAN echo: sent 0x6F=0 to addresses 1..8");
+    }
+
+    void CanBus::enable_echoes_at_startup() {
+        // The drivers' 0x6F setting may have been left at "no reply" by an
+        // earlier configuration tool.  The vendor example relies on the
+        // factory default, so it never sends this; doing it once at boot
+        // makes a silent driver recover automatically without adding 0x6F
+        // traffic to the normal motor transactions.
+        //
+        // No worker exists yet, so the bus lock is not needed here.
+        if (!send_echo_state_forced(true)) {
+            // Nobody acknowledged the broadcast: no powered driver on the
+            // bus, so skip the addressed attempts (they would only raise the
+            // error counters).
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(10));
+        for (uint8_t address = 1; address <= 8; ++address) {
+            enable_driver_echo_locked(address);
+        }
+        flush_receive();
+        log_info("CAN: enabled command echo on the drivers at startup");
     }
 
     void CanBus::set_driver_echo(bool enable) {
@@ -635,12 +663,42 @@ namespace Machine {
         if (twai_get_status_info(&status) != ESP_OK) {
             return;
         }
+        const uint32_t now = now_ms();
         if (status.state == TWAI_STATE_BUS_OFF) {
-            log_error("CAN: bus off, starting recovery");
+            _bus_off_count++;
+            if (_last_state_log_ms == 0 || now - _last_state_log_ms >= 2000) {
+                _last_state_log_ms = now;
+                log_error("CAN: bus off (count:" << _bus_off_count << "), starting recovery");
+            }
             twai_initiate_recovery();
         } else if (status.state == TWAI_STATE_STOPPED) {
+            log_verbose("CAN: restarting bus after recovery");
             twai_start();
+        } else if (status.tx_error_counter > 127 && (_last_state_log_ms == 0 || now - _last_state_log_ms >= 2000)) {
+            _last_state_log_ms = now;
+            log_warn("CAN: error-passive, tx_err=" << status.tx_error_counter << " rx_err=" << status.rx_error_counter);
         }
+    }
+
+    void CanBus::report_status() {
+        if (!_ready) {
+            log_info("CAN status: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        twai_status_info_t status;
+        esp_err_t          err = twai_get_status_info(&status);
+        if (err != ESP_OK) {
+            log_error("CAN status: cannot read TWAI status: " << esp_err_to_name(err));
+            return;
+        }
+        log_info("CAN status: state=" << twai_state_name(status.state) << " tx_err=" << status.tx_error_counter
+                                      << " rx_err=" << status.rx_error_counter << " bus_errors=" << status.bus_error_count
+                                      << " tx_queue=" << status.msgs_to_tx << " rx_queue=" << status.msgs_to_rx
+                                      << " bus_off_count=" << _bus_off_count);
+        log_info("CAN config: tx=" << _tx.name() << " rx=" << _rx.name() << " baud=" << _baud
+                                   << " command_id=" << uint32_t(_command_id) << " echoes=" << (_echo_state ? "on" : "off"));
     }
 
     void CanBus::worker() {
@@ -670,7 +728,7 @@ namespace Machine {
                 check_state();
             }
 
-            vTaskDelay(pdMS_TO_TICKS(2));
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
 
         _task_exited = true;

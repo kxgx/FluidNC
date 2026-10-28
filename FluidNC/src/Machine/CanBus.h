@@ -114,6 +114,10 @@ namespace Machine {
         // normal operation and scans leave 0x6F at its factory default.
         void enable_all_driver_echo();
 
+        // Logs the TWAI state, error counters and restart count of the bus.
+        // Diagnostic only; takes the transaction lock internally.
+        void report_status();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();
@@ -142,9 +146,10 @@ namespace Machine {
         bool        install_driver();
         void        start_worker();
         bool        test_transceiver();
-        void        send_echo_state(bool enable);          // caller must hold the Lock
-        void        send_echo_state_forced(bool enable);   // caller must hold the Lock
-        void        enable_driver_echo_locked(uint8_t address);  // caller must hold the Lock
+        void        enable_echoes_at_startup();
+        bool        send_echo_state(bool enable);          // caller must hold the Lock
+        bool        send_echo_state_forced(bool enable);   // caller must hold the Lock
+        bool        enable_driver_echo_locked(uint8_t address);  // caller must hold the Lock
         void        enable_all_driver_echo_locked();             // caller must hold the Lock
         int         scan_addresses();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
@@ -167,6 +172,8 @@ namespace Machine {
         volatile bool     _task_exited    = false;
 
         uint32_t      _last_state_check_ms  = 0;
+        uint32_t      _last_state_log_ms    = 0;
+        uint32_t      _bus_off_count        = 0;
         CanBusClient* _clients[MAX_CLIENTS] = { nullptr };
         size_t        _n_clients            = 0;
 

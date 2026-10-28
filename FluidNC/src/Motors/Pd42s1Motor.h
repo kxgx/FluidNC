@@ -115,6 +115,8 @@ namespace MotorDrivers {
         bool sync();
         bool transact(
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
+        bool transact_retry(
+            const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs, uint8_t attempts);
         void     apply_disable(uint32_t nowMs);
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         void     poll_position();
@@ -155,6 +157,12 @@ namespace MotorDrivers {
         uint32_t _lastTarget     = 0;
         bool     _targetDirty    = true;
         int32_t  _driverPosition = 0;
+
+        // Consecutive failed transactions.  A marginal CAN bus drops the odd
+        // response; only after several failures in a row is the driver
+        // considered lost and re-synchronised.
+        uint8_t _writeFailures = 0;
+        uint8_t _readFailures  = 0;
     };
 }
 
