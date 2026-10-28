@@ -92,6 +92,11 @@ namespace Machine {
         // cannot interleave its own requests.
         int scan();
 
+        // Tries the same scan at every PD42S1 bit rate (125k, 250k, 500k and
+        // 1M), then restores the configured bit rate and restarts the worker.
+        // Useful when the drivers' CAN bit rate is not known.
+        int scan_all_bauds();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();
@@ -120,6 +125,7 @@ namespace Machine {
         bool        install_driver();
         void        start_worker();
         bool        test_transceiver();
+        int         scan_addresses();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
         bool        transact(
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);

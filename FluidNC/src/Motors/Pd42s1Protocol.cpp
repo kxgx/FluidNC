@@ -34,7 +34,12 @@ namespace MotorDrivers {
     size_t Pd42s1Protocol::build_position_command(
         uint8_t address, uint8_t accel, uint16_t speed_rpm, uint32_t position, uint8_t* out, size_t out_size) {
         uint8_t data[8];
-        data[0] = 0;  // direction; the absolute target determines the motion
+        // Byte 1 is the rotation direction in the PD42S1 protocol
+        // (0 = forward, 1 = reverse).  It is currently fixed to 0: the
+        // driver's behaviour for negative absolute targets is not documented,
+        // so direction handling is pending a hardware check (see the CAN code
+        // review).
+        data[0] = 0;
         data[1] = accel;
         data[2] = uint8_t(speed_rpm >> 8);
         data[3] = uint8_t(speed_rpm & 0xFF);

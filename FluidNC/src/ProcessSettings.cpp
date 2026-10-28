@@ -31,6 +31,7 @@
 
 #include "FluidPath.h"
 #include "HashFS.h"
+#include "string_util.h"
 #ifdef HEAPDIFF
 #    include "HeapDiff.h"
 #endif
@@ -1253,6 +1254,14 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
 static Error can_scan(const char* value, AuthenticationLevel auth_level, Channel& out) {
     if (!config->_can) {
         log_info("CAN scan: no can: section configured");
+        return Error::Ok;
+    }
+    if (value && *value) {
+        if (string_util::equal_ignore_case(value, "all")) {
+            config->_can->scan_all_bauds();
+        } else {
+            log_info("CAN scan: unknown option '" << value << "' (only 'all' is supported)");
+        }
         return Error::Ok;
     }
     config->_can->scan();

@@ -93,3 +93,37 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
   CAN worker task.  Adding more motors increases the time between position
   updates; keep the total CAN load in mind when using many axes or a low
   `update_ms`.
+
+## Bring-up and troubleshooting
+
+1. Power the driver from its rated motor supply (12..32 V) and connect its
+   ground to the ESP32 ground; the SN65HVD230 runs from 3.3 V.
+2. Configure each driver over its UART port before putting it on the bus:
+   slave address (`0x60`), CAN bit rate (`0x68`, value in kbps: 500 -> 0x01F4,
+   1000 -> 0x03E8), then save (`0x04`).  The factory default bit rate is
+   **500 kbps**, so either set the drivers to 1000 or set `can: baud` to
+   500000 -- a mismatch produces no acknowledgement on the bus.
+3. The controller transmits on extended ID `0x1000`; the PD42S1 accepts IDs in
+   `0x1000..0x100F` only.  `can: command_id` is validated against that range.
+4. Leave command echo (`0x6F`) at 0 (acknowledge).  With `0x6F = 1` the driver
+   stops replying and every transaction in FluidNC will time out.
+5. Bus wiring: twisted CANH/CANL pair, 120 ohm at the two physical ends only,
+   common ground.  The SN65HVD230 `Rs` pin must be tied to GND for high-speed
+   mode (or through 10k..100k for slope control).
+6. Diagnostics:
+   * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters, and
+     version reads at addresses 1..8 at the configured bit rate.
+   * `$CANScan=all` -- repeats the address scan at 125k, 250k, 500k and 1 Mbps
+     (useful when the driver bit rate is unknown); restores the configured bit
+     rate and restarts the CAN worker afterwards.
+   * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
+     each candidate GPIO low.  Bench/debug only: it briefly drives pins that
+     may be limit switches, STEP/DIR or enable lines.
+7. If `$CANScan` reports `transceiver detected` but `(no devices)` and the TWAI
+   state is `bus-off`, no other node is acknowledging: check driver power,
+   CANH/CANL wiring, termination and the driver's bit rate.
+8. Direction: the `pd42s1` profile currently sends direction byte 0 in every
+   `0xF2` (absolute position) command.  Before running negative moves, jog a
+   single motor a small amount in both directions and confirm the sign
+   convention; this is a known open item (see the code review report).
+

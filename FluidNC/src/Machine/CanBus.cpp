@@ -447,6 +447,11 @@ namespace Machine {
         // Discard any frames that are still queued from earlier transactions.
         flush_receive();
 
+        int found = scan_addresses();
+        return found;
+    }
+
+    int CanBus::scan_addresses() {
         int found = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
             found += scan_address(address, 100);
@@ -455,6 +460,56 @@ namespace Machine {
             log_info("  (no devices)");
         }
         return found;
+    }
+
+    int CanBus::scan_all_bauds() {
+        if (!_ready) {
+            log_info("CAN scan: bus not ready");
+            return 0;
+        }
+
+        // Transceiver detection works with GPIOs and is independent of the bit
+        // rate, so run it once at the configured rate before changing anything.
+        test_transceiver();
+        if (!_ready) {
+            log_info("CAN scan: bus not ready");
+            return 0;
+        }
+
+        static const uint32_t bauds[]    = { 125000, 250000, 500000, 1000000 };
+        const uint32_t        configured = _baud;
+        int                   total      = 0;
+
+        // Stop the worker and release the bus; no client transaction may run
+        // while the driver is reinstalled at the different bit rates.
+        suspend();
+
+        {
+            Lock lock(*this);
+            for (uint32_t baud : bauds) {
+                _baud = baud;
+                if (!install_driver()) {
+                    log_error("CAN scan: cannot install driver at " << baud << " baud");
+                    continue;
+                }
+                _ready = true;
+                log_info("CAN scan at " << baud << " baud:");
+                flush_receive();
+                total += scan_addresses();
+                twai_stop();
+                twai_driver_uninstall();
+                _ready = false;
+            }
+        }
+
+        _baud = configured;
+        if (!install_driver()) {
+            log_error("CAN: cannot restore the bus after the baud scan");
+            return total;
+        }
+        start_worker();
+        log_info("CAN scan: restored " << _baud << " baud");
+        return total;
     }
 
     void CanBus::check_state() {
