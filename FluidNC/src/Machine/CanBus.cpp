@@ -10,6 +10,7 @@
 #    include "Logging.h"
 #    include "Motors/Pd42s1Protocol.h"
 
+#    include <Arduino.h>
 #    include <driver/twai.h>
 #    include <esp_timer.h>
 
@@ -118,23 +119,31 @@ namespace Machine {
             return;
         }
 
-        twai_timing_config_t timing;
-        if (!timing_for_baud(_baud, timing)) {
-            log_error("CAN: unsupported baud " << _baud);
-            return;
-        }
-
-        auto tx_pin = _tx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
-        auto rx_pin = _rx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Input);
-        Assert(tx_pin != INVALID_PINNUM, "CAN tx_pin must be a native GPIO");
-        Assert(rx_pin != INVALID_PINNUM, "CAN rx_pin must be a native GPIO");
-
         _bus_mutex  = xSemaphoreCreateMutex();
         _list_mutex = xSemaphoreCreateMutex();
         if (!_bus_mutex || !_list_mutex) {
             log_error("CAN: cannot create mutexes");
             return;
         }
+
+        if (!install_driver()) {
+            return;
+        }
+        start_worker();
+        log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
+    }
+
+    bool CanBus::install_driver() {
+        twai_timing_config_t timing;
+        if (!timing_for_baud(_baud, timing)) {
+            log_error("CAN: unsupported baud " << _baud);
+            return false;
+        }
+
+        auto tx_pin = _tx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
+        auto rx_pin = _rx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Input);
+        Assert(tx_pin != INVALID_PINNUM, "CAN tx_pin must be a native GPIO");
+        Assert(rx_pin != INVALID_PINNUM, "CAN rx_pin must be a native GPIO");
 
         twai_general_config_t general = TWAI_GENERAL_CONFIG_DEFAULT((gpio_num_t)tx_pin, (gpio_num_t)rx_pin, TWAI_MODE_NORMAL);
         general.rx_queue_len          = 32;
@@ -145,25 +154,79 @@ namespace Machine {
         esp_err_t err = twai_driver_install(&general, &timing, &filter);
         if (err != ESP_OK) {
             log_error("CAN: driver install failed: " << esp_err_to_name(err));
-            return;
+            return false;
         }
         err = twai_start();
         if (err != ESP_OK) {
             log_error("CAN: start failed: " << esp_err_to_name(err));
             twai_driver_uninstall();
-            return;
+            return false;
         }
+        return true;
+    }
 
+    void CanBus::start_worker() {
         _stop_requested = false;
         _task_exited    = false;
         _ready          = true;
-        log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
 
         if (xTaskCreate(worker_entry, "can", 4096, this, 2, &_task_handle) != pdPASS) {
             log_error("CAN: cannot create worker task");
             _task_handle = nullptr;
             _ready       = false;
         }
+    }
+
+    bool CanBus::test_transceiver() {
+        // The transceiver has no status output that the controller could read,
+        // but it does loop the bus state back on its R pin: driving D dominant
+        // (TX low) must make R dominant (RX low), and driving D recessive (TX
+        // high) must make R recessive (RX high).  This test temporarily gives
+        // the TX/RX pins back to the GPIO controller, so the TWAI driver and
+        // worker are suspended for the duration.
+        if (!_ready) {
+            log_info("CAN transceiver test: bus not ready");
+            return false;
+        }
+
+        auto tx_pin = _tx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
+        auto rx_pin = _rx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Input);
+
+        stop_worker();
+        twai_stop();
+        twai_driver_uninstall();
+        _ready = false;
+        delay(5);
+
+        pinMode(rx_pin, INPUT_PULLUP);
+        pinMode(tx_pin, OUTPUT);
+
+        digitalWrite(tx_pin, 1);  // recessive
+        delay(2);
+        int rx_recessive = digitalRead(rx_pin);
+
+        digitalWrite(tx_pin, 0);  // dominant
+        delay(2);
+        int rx_dominant = digitalRead(rx_pin);
+
+        digitalWrite(tx_pin, 1);  // back to recessive
+        delay(2);
+
+        log_info("CAN transceiver test: D=recessive -> R=" << rx_recessive << ", D=dominant -> R=" << rx_dominant);
+        bool present = (rx_recessive == 1 && rx_dominant == 0);
+        if (present) {
+            log_info("CAN transceiver: detected (D/R loopback OK)");
+        } else {
+            log_error("CAN transceiver: NOT detected or not responding");
+        }
+
+        delay(10);
+        if (!install_driver()) {
+            log_error("CAN: cannot restore the bus after the transceiver test");
+            return present;
+        }
+        start_worker();
+        return present;
     }
 
     void CanBus::add_client(CanBusClient* client) {
@@ -294,6 +357,14 @@ namespace Machine {
     }
 
     int CanBus::scan() {
+        if (!_ready) {
+            log_info("CAN scan: bus not ready");
+            return 0;
+        }
+
+        // Check the physical layer first: this also restarts the bus and the
+        // worker when it is done.
+        test_transceiver();
         if (!_ready) {
             log_info("CAN scan: bus not ready");
             return 0;

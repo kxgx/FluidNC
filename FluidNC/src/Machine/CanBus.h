@@ -96,6 +96,9 @@ namespace Machine {
         void        take();
         void        release();
         void        check_state();
+        bool        install_driver();
+        void        start_worker();
+        bool        test_transceiver();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
         bool        transact(
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
