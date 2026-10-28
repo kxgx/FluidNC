@@ -450,17 +450,24 @@ namespace Machine {
     int CanBus::scan_address(uint8_t address, uint32_t timeout_ms) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
-        size_t  responseLen = 0;
-        size_t  requestLen  = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
+        size_t  requestLen = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
 
-        uint8_t firmwareVersion = 0;
-        uint8_t hardwareVersion = 0;
-        if (transact(request, requestLen, response, sizeof(response), responseLen, timeout_ms) &&
-            Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion)) {
-            log_info("  CAN device at address " << int(address) << " firmware V" << int(firmwareVersion / 10) << "."
-                                                << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "."
-                                                << int(hardwareVersion % 10));
-            return 1;
+        // A marginal bus can lose a response occasionally, so give every
+        // address a few tries before declaring it absent.
+        constexpr int MAX_ATTEMPTS = 3;
+        for (int attempt = 1; attempt <= MAX_ATTEMPTS; ++attempt) {
+            size_t  responseLen     = 0;
+            uint8_t firmwareVersion = 0;
+            uint8_t hardwareVersion = 0;
+            if (transact(request, requestLen, response, sizeof(response), responseLen, timeout_ms) &&
+                Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion)) {
+                log_info("  CAN device at address " << int(address) << " firmware V" << int(firmwareVersion / 10) << "."
+                                                    << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "."
+                                                    << int(hardwareVersion % 10)
+                                                    << (attempt > 1 ? " (after retry)" : ""));
+                return 1;
+            }
+            vTaskDelay(pdMS_TO_TICKS(5));
         }
         return 0;
     }
@@ -485,6 +492,8 @@ namespace Machine {
 
             // The requirement for a read is: enable command echo first.
             send_echo_state_forced(true);
+            // Give the drivers a moment to apply the setting before reading.
+            vTaskDelay(pdMS_TO_TICKS(10));
 
             twai_status_info_t status;
             if (twai_get_status_info(&status) == ESP_OK) {
@@ -555,6 +564,7 @@ namespace Machine {
                 flush_receive();
                 uint32_t tecBefore = twai_tx_error_counter();
                 send_echo_state_forced(true);
+                vTaskDelay(pdMS_TO_TICKS(10));  // let the drivers apply the echo setting
                 total += scan_addresses();
                 uint32_t tecAfter = twai_tx_error_counter();
                 log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
