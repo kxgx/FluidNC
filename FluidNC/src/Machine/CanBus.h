@@ -103,6 +103,12 @@ namespace Machine {
         // Lock.  Broadcast commands are executed but never answered.
         void set_driver_echo(bool enable);
 
+        // Sends the same 0x6F = 0 command to one specific driver.  This is
+        // more reliable than a broadcast when several drivers share the bus:
+        // a driver that missed one broadcast would otherwise stay silent for
+        // every later transaction.  Takes the lock internally.
+        void enable_driver_echo(uint8_t address);
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();
@@ -133,6 +139,7 @@ namespace Machine {
         bool        test_transceiver();
         void        send_echo_state(bool enable);          // caller must hold the Lock
         void        send_echo_state_forced(bool enable);   // caller must hold the Lock
+        void        enable_driver_echo_locked(uint8_t address);  // caller must hold the Lock
         int         scan_addresses();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
         bool        transact(

@@ -439,6 +439,27 @@ namespace Machine {
         send_echo_state(enable);
     }
 
+    void CanBus::enable_driver_echo_locked(uint8_t address) {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t echo = 0;  // 0 = acknowledge commands
+        size_t  len  = Pd42s1Protocol::build_frame(address, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
+        if (!len) {
+            return;
+        }
+        log_verbose("CAN: enabling command echo at address " << int(address));
+        send_message(request, len, 50);
+        vTaskDelay(pdMS_TO_TICKS(2));  // let the driver apply the setting
+        flush_receive();               // discard its ack if echo was already on
+    }
+
+    void CanBus::enable_driver_echo(uint8_t address) {
+        if (!_ready) {
+            return;
+        }
+        Lock lock(*this);
+        enable_driver_echo_locked(address);
+    }
+
     void CanBus::set_driver_echo(bool enable) {
         if (!_ready) {
             return;
@@ -451,6 +472,12 @@ namespace Machine {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  requestLen = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
+
+        // Enable command echo on this specific driver first.  The official
+        // example leaves echo at its default (on) and never toggles it; doing
+        // it per address means a driver that missed an earlier broadcast is
+        // recovered on the next scan instead of staying silent forever.
+        enable_driver_echo_locked(address);
 
         // A marginal bus can lose a response occasionally, so give every
         // address a few tries before declaring it absent.
@@ -490,11 +517,6 @@ namespace Machine {
         {
             Lock lock(*this);
 
-            // The requirement for a read is: enable command echo first.
-            send_echo_state_forced(true);
-            // Give the drivers a moment to apply the setting before reading.
-            vTaskDelay(pdMS_TO_TICKS(10));
-
             twai_status_info_t status;
             if (twai_get_status_info(&status) == ESP_OK) {
                 log_info("CAN scan: state=" << twai_state_name(status.state) << " tx_err=" << status.tx_error_counter
@@ -510,9 +532,6 @@ namespace Machine {
             log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
                                       << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
                                                                  : " (no ACK - check driver power, wiring and bit rate)"));
-
-            // ... and disable command echo again when the read is finished.
-            send_echo_state_forced(false);
         }
 
         return found;
@@ -563,16 +582,11 @@ namespace Machine {
                 log_info("CAN scan at " << baud << " baud:");
                 flush_receive();
                 uint32_t tecBefore = twai_tx_error_counter();
-                send_echo_state_forced(true);
-                vTaskDelay(pdMS_TO_TICKS(10));  // let the drivers apply the echo setting
                 total += scan_addresses();
                 uint32_t tecAfter = twai_tx_error_counter();
                 log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
                                           << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
                                                                      : " (no ACK - check driver power, wiring and bit rate)"));
-                // Leave the drivers in the requested "no unsolicited replies"
-                // state after every rate, including the last one.
-                send_echo_state_forced(false);
                 twai_stop();
                 twai_driver_uninstall();
                 _ready = false;
