@@ -43,6 +43,11 @@
 
 #include <Arduino.h>  // PIN_LED
 
+#if MAX_N_I2C
+#    include "Driver/fluidnc_i2c.h"  // i2c_write(), i2c_master_init()
+#    include "Machine/I2CBus.h"
+#endif
+
 // WG Readable and writable as guest
 // WU Readable and writable as user and admin
 // WA Readable as user and admin, writable as admin
@@ -1067,6 +1072,69 @@ static Error list_parameters(const char* value, AuthenticationLevel auth_level, 
     return Error::Ok;
 }
 
+#if MAX_N_I2C
+// Scan one I2C bus, in ascending or descending address order.  A zero-length
+// write is used as a probe: it transfers only the address byte, so the device
+// responds with ACK if it is present.
+static int scan_i2c_range(objnum_t bus_number, bool backwards) {
+    int     found    = 0;
+    uint8_t probe[1] = { 0 };
+    int     first    = backwards ? 0x77 : 0x03;
+    int     last     = backwards ? 0x02 : 0x78;
+    int     step     = backwards ? -1 : 1;
+    for (int address = first; address != last; address += step) {
+        if (i2c_write(bus_number, uint8_t(address), probe, 0) == 0) {
+            log_info("  I2C device at " << to_hex(uint32_t(address)));
+            ++found;
+        }
+    }
+    if (!found) {
+        log_info("  (no devices)");
+    }
+    return found;
+}
+
+static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    bool any = false;
+    for (objnum_t bus = 0; bus < MAX_N_I2C; ++bus) {
+        I2CBus* i2c = config->_i2c[bus];
+        if (!i2c || !i2c->_sda.defined() || !i2c->_scl.defined()) {
+            continue;
+        }
+        any = true;
+
+        log_info("I2C" << bus << " scan (normal) SDA:" << i2c->_sda.name() << " SCL:" << i2c->_scl.name()
+                       << " freq:" << i2c->_frequency);
+        log_info(" forward:");
+        scan_i2c_range(bus, false);
+        log_info(" reverse:");
+        scan_i2c_range(bus, true);
+
+#    if MAX_N_I2C > 1
+        if (bus == 0) {
+            // "Reverse" wiring probe: run the same two scans on a second,
+            // otherwise-unused I2C controller with SDA and SCL exchanged, so
+            // the already-configured bus 0 is not disturbed.
+            auto caps = Pin::Capabilities::Native | Pin::Capabilities::Input | Pin::Capabilities::Output;
+            auto sda  = i2c->_sda.getNative(caps);
+            auto scl  = i2c->_scl.getNative(caps);
+
+            log_info("I2C0 scan (SDA/SCL swapped) on bus 1 SDA:" << i2c->_scl.name() << " SCL:" << i2c->_sda.name());
+            i2c_master_init(1, scl, sda, i2c->_frequency);
+            log_info(" forward:");
+            scan_i2c_range(1, false);
+            log_info(" reverse:");
+            scan_i2c_range(1, true);
+        }
+#    endif
+    }
+    if (!any) {
+        log_info("I2C scan: no I2C bus configured");
+    }
+    return Error::Ok;
+}
+#endif
+
 // Commands use the same syntax as Settings, but instead of setting or
 // displaying a persistent value, a command causes some action to occur.
 // That action could be anything, from displaying a run-time parameter
@@ -1082,6 +1150,9 @@ void make_user_commands() {
 
     new ReportCommand("CI", "Channel/Info", showChannelInfo, anyState);
     new ReportCommand("CD", "Config/Dump", dump_config, anyState);
+#if MAX_N_I2C
+    new ReportCommand("I2CScan", "System/I2CScan", i2c_scan, anyState);
+#endif
     new ReportCommand("", "Help", show_help, anyState);
     new ReportCommand("T", "State", showState, anyState);
 
