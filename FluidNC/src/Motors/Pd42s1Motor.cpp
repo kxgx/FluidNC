@@ -183,12 +183,6 @@ namespace MotorDrivers {
         size_t  responseLen = 0;
         uint8_t address     = uint8_t(_address);
 
-        // Reading the driver requires command echo to be enabled.  Enable it
-        // on this specific driver (the official example simply leaves it at
-        // its default "on"; broadcasts can be missed when several drivers
-        // share the bus).
-        _bus->enable_driver_echo(address);
-
         size_t  len             = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
         uint8_t firmwareVersion = 0;
         uint8_t hardwareVersion = 0;

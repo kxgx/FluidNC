@@ -112,21 +112,24 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
    mode (or through 10k..100k for slope control).
 6. Diagnostics:
    * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters,
-     then for each address 1..8: sends an **addressed** `0x6F = 0` (enable
-     command echo on that specific driver; the official example simply leaves
-     the factory-default echo on and never toggles it), followed by up to three
-     version-read attempts.  Echo is left enabled afterwards; there is no
-     broadcast and no echo-off step (a broadcast can be missed by one driver
-     on a marginal bus, which would leave it silent forever).  The reported
+     then, exactly like the vendor CAN example, version reads at addresses
+     1..8 at the configured bit rate (extended frames, accept-all filter,
+     echo left at its factory default "on").  Each address is probed up to
+     three times (`after retry` in the log).  The reported
      `TWAI tx_err before -> after` tells whether any node ACKed the frames:
      `0 -> 0` means a powered node is present, an increase means nobody ACKed
      (check power, CANH/CANL wiring and bit rate).
-   * `$CANScan=all` -- repeats the same per-address echo/read sequence at 125k,
-     250k, 500k and 1 Mbps (useful when the driver bit rate is unknown);
-     restores the configured bit rate and restarts the CAN worker afterwards.
+   * `$CANScan=all` -- repeats the same scan at 125k, 250k, 500k and 1 Mbps
+     (useful when the driver bit rate is unknown); restores the configured bit
+     rate and restarts the CAN worker afterwards.
    * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
      each candidate GPIO low.  Bench/debug only: it briefly drives pins that
      may be limit switches, STEP/DIR or enable lines.
+
+> The firmware does **not** change the driver's command-echo setting (0x6F) at
+> run time.  The official example relies on the factory default, echo = on.
+> If a driver was left at "no reply" (`0x6F = 1`), set it back to 0 with the
+> vendor tool; otherwise every transaction to that driver silently times out.
 7. If `$CANScan` reports `transceiver detected` but `(no devices)` and the TWAI
    state is `bus-off`, no other node is acknowledging: check driver power,
    CANH/CANL wiring, termination and the driver's bit rate.

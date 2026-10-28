@@ -473,12 +473,6 @@ namespace Machine {
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  requestLen = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
 
-        // Enable command echo on this specific driver first.  The official
-        // example leaves echo at its default (on) and never toggles it; doing
-        // it per address means a driver that missed an earlier broadcast is
-        // recovered on the next scan instead of staying silent forever.
-        enable_driver_echo_locked(address);
-
         // A marginal bus can lose a response occasionally, so give every
         // address a few tries before declaring it absent.
         constexpr int MAX_ATTEMPTS = 3;
