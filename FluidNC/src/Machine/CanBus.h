@@ -76,6 +76,11 @@ namespace Machine {
         // cannot interleave its own requests.
         int scan();
 
+        // Releases the TWAI pins so diagnostics (like the transceiver test or
+        // the pin sweep) can use them as plain GPIO, then restores the bus.
+        void suspend();
+        bool resume();
+
         // Serializes transactions.  The protocol has no request IDs, so a
         // transaction must hold this from its first transmitted frame until
         // its last received response frame has been assembled.

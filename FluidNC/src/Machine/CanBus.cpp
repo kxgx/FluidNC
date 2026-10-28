@@ -177,6 +177,29 @@ namespace Machine {
         }
     }
 
+    void CanBus::suspend() {
+        if (!_ready) {
+            return;
+        }
+        stop_worker();
+        twai_stop();
+        twai_driver_uninstall();
+        _ready = false;
+        delay(5);
+    }
+
+    bool CanBus::resume() {
+        if (_ready) {
+            return true;
+        }
+        if (!install_driver()) {
+            log_error("CAN: cannot restore the bus");
+            return false;
+        }
+        start_worker();
+        return true;
+    }
+
     bool CanBus::test_transceiver() {
         // The transceiver has no status output that the controller could read,
         // but it does loop the bus state back on its R pin: driving D dominant
@@ -192,11 +215,7 @@ namespace Machine {
         auto tx_pin = _tx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
         auto rx_pin = _rx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Input);
 
-        stop_worker();
-        twai_stop();
-        twai_driver_uninstall();
-        _ready = false;
-        delay(5);
+        suspend();
 
         pinMode(rx_pin, INPUT_PULLUP);
         pinMode(tx_pin, OUTPUT);
@@ -220,12 +239,10 @@ namespace Machine {
             log_error("CAN transceiver: NOT detected or not responding");
         }
 
+        pinMode(tx_pin, INPUT_PULLUP);
+        pinMode(rx_pin, INPUT_PULLUP);
         delay(10);
-        if (!install_driver()) {
-            log_error("CAN: cannot restore the bus after the transceiver test");
-            return present;
-        }
-        start_worker();
+        resume();
         return present;
     }
 

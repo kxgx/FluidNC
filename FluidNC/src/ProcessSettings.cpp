@@ -1258,6 +1258,79 @@ static Error can_scan(const char* value, AuthenticationLevel auth_level, Channel
     config->_can->scan();
     return Error::Ok;
 }
+
+#    if defined(ESP32)
+// Brute-force search for a CAN transceiver: for every candidate pin, pull it
+// low and watch every other candidate pin.  A transceiver's R output follows
+// its D input (through the CAN bus), so the pair (D, R) shows up as
+// "idle high / driven low / back high" on the second pin.
+// Only low drive is used (input-pullup = high, output-low = dominant), so
+// nothing is ever driven high against a switch closure or another output.
+static Error can_sweep(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN sweep: no can: section configured");
+        return Error::Ok;
+    }
+
+    static const pinnum_t candidates[] = { 1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 48 };
+    constexpr size_t      N            = sizeof(candidates) / sizeof(candidates[0]);
+
+    log_info("CAN sweep: probing " << N << " candidate pins for a transceiver D/R loopback");
+    config->_can->suspend();
+
+    for (size_t i = 0; i < N; ++i) {
+        pinMode(candidates[i], INPUT_PULLUP);
+    }
+    delay(5);
+
+    int found = 0;
+    for (size_t ti = 0; ti < N; ++ti) {
+        pinnum_t tx = candidates[ti];
+
+        pinMode(tx, INPUT_PULLUP);
+        delayMicroseconds(300);
+        int idle[N];
+        for (size_t i = 0; i < N; ++i) {
+            idle[i] = (i == ti) ? 1 : digitalRead(candidates[i]);
+        }
+
+        pinMode(tx, OUTPUT);
+        digitalWrite(tx, 0);
+        delayMicroseconds(300);
+        int dominant[N];
+        for (size_t i = 0; i < N; ++i) {
+            dominant[i] = (i == ti) ? 0 : digitalRead(candidates[i]);
+        }
+
+        pinMode(tx, INPUT_PULLUP);
+        delayMicroseconds(300);
+        int released[N];
+        for (size_t i = 0; i < N; ++i) {
+            released[i] = (i == ti) ? 1 : digitalRead(candidates[i]);
+        }
+
+        for (size_t ri = 0; ri < N; ++ri) {
+            if (ri == ti) {
+                continue;
+            }
+            if (idle[ri] == 1 && dominant[ri] == 0 && released[ri] == 1) {
+                log_info("  possible transceiver: D/TX=gpio." << candidates[ti] << " R/RX=gpio." << candidates[ri]);
+                ++found;
+            }
+        }
+        delayMicroseconds(300);
+    }
+
+    for (size_t i = 0; i < N; ++i) {
+        pinMode(candidates[i], INPUT_PULLUP);
+    }
+    if (!found) {
+        log_info("CAN sweep: no transceiver detected on the candidate pins");
+    }
+    config->_can->resume();
+    return Error::Ok;
+}
+#    endif
 #endif
 
 // Commands use the same syntax as Settings, but instead of setting or
@@ -1280,6 +1353,9 @@ void make_user_commands() {
 #endif
 #if MAX_N_CAN
     new ReportCommand("CANScan", "System/CANScan", can_scan, anyState);
+#    if defined(ESP32)
+    new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
+#    endif
 #endif
     new ReportCommand("", "Help", show_help, anyState);
     new ReportCommand("T", "State", showState, anyState);
