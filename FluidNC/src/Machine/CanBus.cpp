@@ -8,6 +8,7 @@
 #    include "CanBus.h"
 
 #    include "Logging.h"
+#    include "Motors/Pd42s1Protocol.h"
 
 #    include <driver/twai.h>
 #    include <esp_timer.h>
@@ -15,9 +16,26 @@
 #    include <cstring>
 
 namespace Machine {
+    using MotorDrivers::Pd42s1Protocol;
+
     namespace {
         uint32_t now_ms() {
             return uint32_t(esp_timer_get_time() / 1000);
+        }
+
+        const char* twai_state_name(twai_state_t state) {
+            switch (state) {
+                case TWAI_STATE_STOPPED:
+                    return "stopped";
+                case TWAI_STATE_RUNNING:
+                    return "running";
+                case TWAI_STATE_BUS_OFF:
+                    return "bus-off";
+                case TWAI_STATE_RECOVERING:
+                    return "recovering";
+                default:
+                    return "unknown";
+            }
         }
 
         bool timing_for_baud(uint32_t baud, twai_timing_config_t& timing) {
@@ -217,6 +235,91 @@ namespace Machine {
         }
         memcpy(buf, message.data, len);
         return len;
+    }
+
+    bool CanBus::transact(
+        const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs) {
+        responseLen = 0;
+        if (!_ready || requestLen == 0) {
+            return false;
+        }
+        if (!send_message(request, requestLen, timeoutMs)) {
+            return false;
+        }
+
+        const uint32_t deadline = now_ms() + timeoutMs;
+        size_t         total    = 0;
+        while (total < responseCapacity) {
+            int32_t remaining = int32_t(deadline - now_ms());
+            if (remaining <= 0) {
+                return false;
+            }
+            size_t received = receive_chunk(response + total, responseCapacity - total, uint32_t(remaining));
+            if (received == 0) {
+                return false;
+            }
+            total += received;
+
+            size_t expected = Pd42s1Protocol::expected_response_length(response, total);
+            if (expected == SIZE_MAX) {
+                return false;
+            }
+            if (expected != 0 && total >= expected) {
+                if (total != expected) {
+                    return false;
+                }
+                responseLen = total;
+                return Pd42s1Protocol::valid_response(response, total);
+            }
+        }
+        return false;
+    }
+
+    int CanBus::scan_address(uint8_t address, uint32_t timeout_ms) {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+        size_t  requestLen  = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
+
+        uint8_t firmwareVersion = 0;
+        uint8_t hardwareVersion = 0;
+        if (transact(request, requestLen, response, sizeof(response), responseLen, timeout_ms) &&
+            Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion)) {
+            log_info("  CAN device at address " << int(address) << " firmware V" << int(firmwareVersion / 10) << "."
+                                                << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "."
+                                                << int(hardwareVersion % 10));
+            return 1;
+        }
+        return 0;
+    }
+
+    int CanBus::scan() {
+        if (!_ready) {
+            log_info("CAN scan: bus not ready");
+            return 0;
+        }
+
+        Lock lock(*this);
+
+        twai_status_info_t status;
+        if (twai_get_status_info(&status) == ESP_OK) {
+            log_info("CAN scan: state=" << twai_state_name(status.state) << " tx_err=" << status.tx_error_counter
+                                        << " rx_err=" << status.rx_error_counter << " bus_errors=" << status.bus_error_count);
+        }
+
+        // Discard any frames that are still queued from earlier transactions.
+        uint8_t scratch[TWAI_FRAME_MAX_DLC];
+        while (receive_chunk(scratch, sizeof(scratch), 0) > 0) {
+        }
+
+        int found = 0;
+        for (uint8_t address = 1; address <= 8; ++address) {
+            found += scan_address(address, 100);
+        }
+        if (!found) {
+            log_info("  (no devices)");
+        }
+        return found;
     }
 
     void CanBus::check_state() {

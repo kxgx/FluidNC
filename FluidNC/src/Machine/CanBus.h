@@ -70,6 +70,12 @@ namespace Machine {
         // Returns the payload length, or 0 when no frame arrived in time.
         size_t receive_chunk(uint8_t* buf, size_t max_len, uint32_t timeout_ms);
 
+        // Sends the PD42S1 "read version" command to addresses 1..8 and logs
+        // every device that answers.  Returns the number of responders.
+        // Holds the transaction lock for the whole scan, so the motor worker
+        // cannot interleave its own requests.
+        int scan();
+
         // Serializes transactions.  The protocol has no request IDs, so a
         // transaction must hold this from its first transmitted frame until
         // its last received response frame has been assembled.
@@ -90,6 +96,9 @@ namespace Machine {
         void        take();
         void        release();
         void        check_state();
+        int         scan_address(uint8_t address, uint32_t timeout_ms);
+        bool        transact(
+            const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
         void        worker();
         static void worker_entry(void* arg);
         void        stop_worker();

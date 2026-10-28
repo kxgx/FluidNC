@@ -1249,6 +1249,17 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
 }
 #endif
 
+#if MAX_N_CAN
+static Error can_scan(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN scan: no can: section configured");
+        return Error::Ok;
+    }
+    config->_can->scan();
+    return Error::Ok;
+}
+#endif
+
 // Commands use the same syntax as Settings, but instead of setting or
 // displaying a persistent value, a command causes some action to occur.
 // That action could be anything, from displaying a run-time parameter
@@ -1266,6 +1277,9 @@ void make_user_commands() {
     new ReportCommand("CD", "Config/Dump", dump_config, anyState);
 #if MAX_N_I2C
     new ReportCommand("I2CScan", "System/I2CScan", i2c_scan, anyState);
+#endif
+#if MAX_N_CAN
+    new ReportCommand("CANScan", "System/CANScan", can_scan, anyState);
 #endif
     new ReportCommand("", "Help", show_help, anyState);
     new ReportCommand("T", "State", showState, anyState);
