@@ -145,6 +145,7 @@ namespace Machine {
         void        send_echo_state(bool enable);          // caller must hold the Lock
         void        send_echo_state_forced(bool enable);   // caller must hold the Lock
         void        enable_driver_echo_locked(uint8_t address);  // caller must hold the Lock
+        void        enable_all_driver_echo_locked();             // caller must hold the Lock
         int         scan_addresses();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
         bool        transact(

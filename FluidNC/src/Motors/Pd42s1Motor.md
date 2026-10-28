@@ -119,9 +119,12 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
      `TWAI tx_err before -> after` tells whether any node ACKed the frames:
      `0 -> 0` means a powered node is present, an increase means nobody ACKed
      (check power, CANH/CANL wiring and bit rate).
-   * `$CANScan=all` -- repeats the same scan at 125k, 250k, 500k and 1 Mbps
-     (useful when the driver bit rate is unknown); restores the configured bit
-     rate and restarts the CAN worker afterwards.
+   * `$CANScan=all` -- recovery variant: at each rate it first sends
+     `0x6F = 0` to **all** addresses 1..8 (re-enabling command echo on drivers
+     that were left silent), then scans 125k, 250k, 500k and 1 Mbps; restores
+     the configured bit rate and restarts the CAN worker afterwards.  This is
+     the one command that touches 0x6F; the plain `$CANScan` and normal motor
+     traffic leave the setting untouched, as the vendor example does.
    * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
      each candidate GPIO low.  Bench/debug only: it briefly drives pins that
      may be limit switches, STEP/DIR or enable lines.

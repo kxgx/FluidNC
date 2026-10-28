@@ -460,15 +460,19 @@ namespace Machine {
         enable_driver_echo_locked(address);
     }
 
+    void CanBus::enable_all_driver_echo_locked() {
+        for (uint8_t address = 1; address <= 8; ++address) {
+            enable_driver_echo_locked(address);
+        }
+    }
+
     void CanBus::enable_all_driver_echo() {
         if (!_ready) {
             log_info("CAN echo: bus not ready");
             return;
         }
         Lock lock(*this);
-        for (uint8_t address = 1; address <= 8; ++address) {
-            enable_driver_echo_locked(address);
-        }
+        enable_all_driver_echo_locked();
         log_info("CAN echo: sent 0x6F=0 to addresses 1..8");
     }
 
@@ -536,8 +540,8 @@ namespace Machine {
             found              = scan_addresses();
             uint32_t tecAfter  = twai_tx_error_counter();
             log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
-                                      << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
-                                                                 : " (no ACK - check driver power, wiring and bit rate)"));
+                                      << (tecAfter == 0 ? " (frames were ACKed by a node)"
+                                                        : " (no ACK - check driver power, wiring and bit rate)"));
         }
 
         return found;
@@ -588,11 +592,17 @@ namespace Machine {
                 log_info("CAN scan at " << baud << " baud:");
                 flush_receive();
                 uint32_t tecBefore = twai_tx_error_counter();
+                // The multi-baud recovery scan explicitly enables command
+                // echo on every address before reading; the plain $CANScan
+                // stays faithful to the vendor example (no 0x6F commands).
+                log_info("CAN scan: enabling echo on addresses 1..8");
+                enable_all_driver_echo_locked();
+                vTaskDelay(pdMS_TO_TICKS(5));
                 total += scan_addresses();
                 uint32_t tecAfter = twai_tx_error_counter();
                 log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
-                                          << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
-                                                                     : " (no ACK - check driver power, wiring and bit rate)"));
+                                          << (tecAfter == 0 ? " (frames were ACKed by a node)"
+                                                            : " (no ACK - check driver power, wiring and bit rate)"));
                 twai_stop();
                 twai_driver_uninstall();
                 _ready = false;
