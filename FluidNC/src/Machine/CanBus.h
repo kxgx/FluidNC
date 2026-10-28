@@ -127,6 +127,11 @@ namespace Machine {
         // stopped answering, waits for it to boot, then re-enables echo.
         void restart_drivers();
 
+        // Reads and displays each PD42S1's run status (0x2C), stall flag
+        // (0x2D), enable state (0x2F) and in-position flag (0x30), marking
+        // abnormal conditions (overload/stall/undervoltage).
+        void report_driver_faults();
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();

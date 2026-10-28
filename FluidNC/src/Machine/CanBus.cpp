@@ -29,6 +29,25 @@ namespace Machine {
             return twai_get_status_info(&status) == ESP_OK ? status.tx_error_counter : 0;
         }
 
+        const char* motor_status_name(uint8_t status) {
+            switch (status) {
+                case 0:
+                    return "stopped";
+                case 1:
+                    return "done";
+                case 2:
+                    return "running";
+                case 3:
+                    return "OVERLOAD";
+                case 4:
+                    return "STALL";
+                case 5:
+                    return "UNDERVOLTAGE";
+                default:
+                    return "unknown";
+            }
+        }
+
         const char* twai_state_name(twai_state_t state) {
             switch (state) {
                 case TWAI_STATE_STOPPED:
@@ -731,8 +750,76 @@ namespace Machine {
         log_info("CAN: 0xF9 stall-release acknowledged by " << acked << " address(es)");
     }
 
-    void CanBus::restart_drivers() {
+    void CanBus::report_driver_faults() {
         if (!_ready) {
+            log_info("CAN faults: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        auto read_byte = [this](uint8_t address, uint8_t function, uint8_t& value) {
+            uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+            uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+            size_t  len = Pd42s1Protocol::build_read_command(address, function, request, sizeof(request));
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                size_t responseLen = 0;
+                if (transact(request, len, response, sizeof(response), responseLen, 50) &&
+                    Pd42s1Protocol::parse_byte_value(response, responseLen, function, value)) {
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        int found    = 0;
+        int abnormal = 0;
+        for (uint8_t address = 1; address <= 8; ++address) {
+            uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+            uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+            size_t  len = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
+
+            uint8_t firmware = 0;
+            uint8_t hardware = 0;
+            bool    have     = false;
+            for (int attempt = 0; attempt < 2 && !have; ++attempt) {
+                size_t responseLen = 0;
+                have = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                       Pd42s1Protocol::parse_version(response, responseLen, firmware, hardware);
+            }
+            if (!have) {
+                continue;
+            }
+            found++;
+
+            uint8_t status = 0xFF;
+            uint8_t stall  = 0xFF;
+            uint8_t enable = 0xFF;
+            uint8_t inpos  = 0xFF;
+            read_byte(address, Pd42s1Protocol::FUNC_READ_STATUS, status);
+            read_byte(address, Pd42s1Protocol::FUNC_READ_STALL, stall);
+            read_byte(address, Pd42s1Protocol::FUNC_READ_ENABLE, enable);
+            read_byte(address, Pd42s1Protocol::FUNC_READ_IN_POSITION, inpos);
+
+            log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " hw V"
+                                  << int(hardware / 10) << "." << int(hardware % 10) << " status=" << motor_status_name(status)
+                                  << " stall=" << (stall == 0xFF ? "?" : (stall ? "YES" : "no"))
+                                  << " enabled=" << (enable == 0xFF ? "?" : (enable ? "no" : "yes"))
+                                  << " in-position=" << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
+            if (status >= 3 || stall == 1) {
+                abnormal++;
+            }
+        }
+
+        if (!found) {
+            log_info("CAN faults: (no devices)");
+        } else if (abnormal) {
+            log_warn("CAN faults: " << abnormal << " of " << found << " driver(s) abnormal");
+        } else {
+            log_info("CAN faults: no abnormal drivers");
+        }
+    }
+
+    void CanBus::restart_drivers() {        if (!_ready) {
             log_info("CAN reset: bus not ready");
             return;
         }

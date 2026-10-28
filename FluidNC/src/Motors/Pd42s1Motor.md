@@ -135,6 +135,10 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
      it made all four drivers stop answering until they were power cycled.
      A position command answered with 0xE1..0xE6 automatically tries 0xF9,
      re-enables the motor and forces a fresh sync.
+   * `$CANFaults` -- read and display every driver's run status (0x2C:
+     stopped / done / running / overload / stall / undervoltage), stall flag
+     (0x2D), enable state (0x2F) and in-position flag (0x30); prints a warning
+     summary when overload/stall/undervoltage is seen.
    * `$CANReset` -- broadcast the driver reset command (0x02), wait 2.5 s and
      re-enable command echo.  Bench recovery only: it stops any motion and is
      the last resort before power-cycling the drivers.

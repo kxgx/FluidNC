@@ -179,3 +179,27 @@ TEST(Pd42s1Protocol, ParsesClearStateAck) {
     EXPECT_TRUE(Pd42s1Protocol::valid_response(frame, sizeof(frame)));
     EXPECT_TRUE(Pd42s1Protocol::parse_ack(frame, sizeof(frame)));
 }
+
+TEST(Pd42s1Protocol, ParsesMotorStatusByte) {
+    // Manual example 4.3.13: C5 01 2C 01 01 F4 5C (status byte = 1, done).
+    uint8_t frame[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_STATUS, Pd42s1Protocol::STATUS_OK, 0x01 };
+    finish_response(frame, sizeof(frame));
+
+    uint8_t value = 0xFF;
+    EXPECT_EQ(Pd42s1Protocol::expected_response_length(frame, sizeof(frame)), 7u);
+    EXPECT_TRUE(Pd42s1Protocol::parse_byte_value(frame, sizeof(frame), Pd42s1Protocol::FUNC_READ_STATUS, value));
+    EXPECT_EQ(value, 1);
+}
+
+TEST(Pd42s1Protocol, ParsesStallAndEnableBytes) {
+    uint8_t stall[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_STALL, Pd42s1Protocol::STATUS_OK, 0x01 };
+    finish_response(stall, sizeof(stall));
+    uint8_t value = 0xFF;
+    EXPECT_TRUE(Pd42s1Protocol::parse_byte_value(stall, sizeof(stall), Pd42s1Protocol::FUNC_READ_STALL, value));
+    EXPECT_EQ(value, 1);
+
+    uint8_t enable[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_ENABLE, Pd42s1Protocol::STATUS_OK, 0x00 };
+    finish_response(enable, sizeof(enable));
+    EXPECT_TRUE(Pd42s1Protocol::parse_byte_value(enable, sizeof(enable), Pd42s1Protocol::FUNC_READ_ENABLE, value));
+    EXPECT_EQ(value, 0);
+}

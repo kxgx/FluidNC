@@ -97,6 +97,10 @@ namespace MotorDrivers {
                 return 10;  // status + 4-byte position
             case FUNC_READ_STATUS:
                 return 7;  // status + 1-byte motor status
+            case FUNC_READ_STALL:
+            case FUNC_READ_ENABLE:
+            case FUNC_READ_IN_POSITION:
+                return 7;  // status + 1-byte flag
             case FUNC_SET_MOTOR_ENABLE:
                 return 7;  // status + 1-byte enable state
             case FUNC_SET_ECHO:
@@ -142,10 +146,14 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_motor_status(const uint8_t* frame, size_t len, uint8_t& status) {
-        if (len != 7 || frame[2] != FUNC_READ_STATUS || !valid_response(frame, len)) {
+        return parse_byte_value(frame, len, FUNC_READ_STATUS, status);
+    }
+
+    bool Pd42s1Protocol::parse_byte_value(const uint8_t* frame, size_t len, uint8_t function, uint8_t& value) {
+        if (len != 7 || frame[2] != function || !valid_response(frame, len)) {
             return false;
         }
-        status = frame[4];
+        value = frame[4];
         return true;
     }
 

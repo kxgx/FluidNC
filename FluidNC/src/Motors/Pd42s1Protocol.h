@@ -43,6 +43,9 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_READ_VERSION     = 0x20;
         static constexpr uint8_t FUNC_READ_POSITION    = 0x2A;
         static constexpr uint8_t FUNC_READ_STATUS      = 0x2C;
+        static constexpr uint8_t FUNC_READ_STALL       = 0x2D;
+        static constexpr uint8_t FUNC_READ_ENABLE      = 0x2F;
+        static constexpr uint8_t FUNC_READ_IN_POSITION = 0x30;
         static constexpr uint8_t FUNC_RESTART          = 0x02;  // reset/reboot the driver
         static constexpr uint8_t FUNC_SET_ECHO         = 0x6F;
         static constexpr uint8_t FUNC_CLEAR_STALL      = 0xF9;  // clear stall protection
@@ -98,6 +101,11 @@ namespace MotorDrivers {
         static bool parse_version(const uint8_t* frame, size_t len, uint8_t& firmware_version, uint8_t& hardware_version);
         static bool parse_position(const uint8_t* frame, size_t len, int32_t& position);
         static bool parse_motor_status(const uint8_t* frame, size_t len, uint8_t& status);
+
+        // Parses the single-data-byte responses used by 0x2C..0x30 (run
+        // status, stall flag, enable state, in-position flag).
+        static bool parse_byte_value(const uint8_t* frame, size_t len, uint8_t function, uint8_t& value);
+
         static bool parse_ack(const uint8_t* frame, size_t len);
     };
 }
