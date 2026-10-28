@@ -1313,6 +1313,51 @@ static Error can_faults(const char* value, AuthenticationLevel auth_level, Chann
     return Error::Ok;
 }
 
+static Error can_pos(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN positions: no can: section configured");
+        return Error::Ok;
+    }
+    config->_can->report_driver_positions();
+    return Error::Ok;
+}
+
+static Error can_stop(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN stop: no can: section configured");
+        return Error::Ok;
+    }
+    config->_can->stop_all_drivers();
+    return Error::Ok;
+}
+
+static Error can_read(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN read: no can: section configured");
+        return Error::Ok;
+    }
+    if (!value || !*value) {
+        log_info("CAN read: usage $CANRead=<address>,<function>  e.g. $CANRead=1,0x2C");
+        return Error::Ok;
+    }
+    char*         end  = nullptr;
+    unsigned long addr = strtoul(value, &end, 0);
+    if (end == value) {
+        log_info("CAN read: bad address in '" << value << "'");
+        return Error::Ok;
+    }
+    while (*end == ',' || *end == ':' || *end == ' ') {
+        ++end;
+    }
+    unsigned long func = strtoul(end, &end, 0);
+    if (addr < 1 || addr > 255 || func > 255) {
+        log_info("CAN read: address must be 1..255 and function 0..255");
+        return Error::Ok;
+    }
+    config->_can->read_raw(uint8_t(addr), uint8_t(func));
+    return Error::Ok;
+}
+
 #    if defined(ESP32)
 // Brute-force search for a CAN transceiver: for every candidate pin, pull it
 // low and watch every other candidate pin.  A transceiver's R output follows
@@ -1412,6 +1457,9 @@ void make_user_commands() {
     new ReportCommand("CANClear", "System/CANClear", can_clear, anyState);
     new ReportCommand("CANReset", "System/CANReset", can_reset, anyState);
     new ReportCommand("CANFaults", "System/CANFaults", can_faults, anyState);
+    new ReportCommand("CANPos", "System/CANPos", can_pos, anyState);
+    new ReportCommand("CANStop", "System/CANStop", can_stop, anyState);
+    new ReportCommand("CANRead", "System/CANRead", can_read, anyState);
 #    if defined(ESP32)
     new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
 #    endif

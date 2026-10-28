@@ -139,6 +139,12 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
      stopped / done / running / overload / stall / undervoltage), stall flag
      (0x2D), enable state (0x2F) and in-position flag (0x30); prints a warning
      summary when overload/stall/undervoltage is seen.
+   * `$CANPos` -- read actual position (0x2A), position error (0x2B), speed
+     (0x29) and in-position flag (0x30) for every answering driver.
+   * `$CANStop` -- broadcast the immediate-brake command (0xFC); this stops all
+     motion.  Clear the state afterwards (`$CANClear`) to avoid motor heating.
+   * `$CANRead` -- raw read, e.g. `$CANRead=1,0x2C` (address,function): sends
+     one read command and prints the response bytes in hex.
    * `$CANReset` -- broadcast the driver reset command (0x02), wait 2.5 s and
      re-enable command echo.  Bench recovery only: it stops any motion and is
      the last resort before power-cycling the drivers.

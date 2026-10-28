@@ -132,6 +132,17 @@ namespace Machine {
         // abnormal conditions (overload/stall/undervoltage).
         void report_driver_faults();
 
+        // Reads and displays position (0x2A), position error (0x2B), speed
+        // (0x29) and in-position flag (0x30) from every answering driver.
+        void report_driver_positions();
+
+        // Broadcasts the immediate-brake command (0xFC) to all drivers.
+        void stop_all_drivers();
+
+        // Sends one read command and prints the raw response bytes.  Useful
+        // for exploring function codes that do not have a dedicated command.
+        void read_raw(uint8_t address, uint8_t function);
+
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
         void suspend();

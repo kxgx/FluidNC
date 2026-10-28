@@ -14,6 +14,7 @@
 #    include <driver/twai.h>
 #    include <esp_timer.h>
 
+#    include <cstdio>
 #    include <cstring>
 
 namespace Machine {
@@ -817,6 +818,130 @@ namespace Machine {
         } else {
             log_info("CAN faults: no abnormal drivers");
         }
+    }
+
+    void CanBus::report_driver_positions() {
+        if (!_ready) {
+            log_info("CAN positions: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        int found = 0;
+        for (uint8_t address = 1; address <= 8; ++address) {
+            uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+            uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+            size_t  len = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
+
+            uint8_t firmware = 0;
+            uint8_t hardware = 0;
+            bool    have     = false;
+            for (int attempt = 0; attempt < 2 && !have; ++attempt) {
+                size_t responseLen = 0;
+                have = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                       Pd42s1Protocol::parse_version(response, responseLen, firmware, hardware);
+            }
+            if (!have) {
+                continue;
+            }
+            found++;
+
+            int32_t position = 0;
+            int32_t error    = 0;
+            int16_t speed    = 0;
+            uint8_t inpos    = 0xFF;
+            bool    hasPos   = false;
+            bool    hasError = false;
+            bool    hasSpeed = false;
+
+            for (int attempt = 0; attempt < 2 && !hasPos; ++attempt) {
+                size_t responseLen = 0;
+                len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+                hasPos = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                         Pd42s1Protocol::parse_int32_value(response, responseLen, Pd42s1Protocol::FUNC_READ_POSITION, position);
+            }
+            for (int attempt = 0; attempt < 2 && !hasError; ++attempt) {
+                size_t responseLen = 0;
+                len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_POS_ERROR, request, sizeof(request));
+                hasError = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                           Pd42s1Protocol::parse_int32_value(response, responseLen, Pd42s1Protocol::FUNC_READ_POS_ERROR, error);
+            }
+            for (int attempt = 0; attempt < 2 && !hasSpeed; ++attempt) {
+                size_t responseLen = 0;
+                len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_SPEED, request, sizeof(request));
+                hasSpeed = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                           Pd42s1Protocol::parse_int16_value(response, responseLen, Pd42s1Protocol::FUNC_READ_SPEED, speed);
+            }
+            for (int attempt = 0; attempt < 2 && inpos == 0xFF; ++attempt) {
+                size_t responseLen = 0;
+                len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_IN_POSITION, request, sizeof(request));
+                if (transact(request, len, response, sizeof(response), responseLen, 50)) {
+                    Pd42s1Protocol::parse_byte_value(response, responseLen, Pd42s1Protocol::FUNC_READ_IN_POSITION, inpos);
+                }
+            }
+
+            char posText[16];
+            char errText[16];
+            char speedText[16];
+            snprintf(posText, sizeof(posText), hasPos ? "%ld" : "?", long(position));
+            snprintf(errText, sizeof(errText), hasError ? "%ld" : "?", long(error));
+            snprintf(speedText, sizeof(speedText), hasSpeed ? "%d" : "?", int(speed));
+
+            log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " pos=" << posText
+                                  << " error=" << errText << " speed=" << speedText << "RPM in-position="
+                                  << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
+        }
+        if (!found) {
+            log_info("CAN positions: (no devices)");
+        }
+    }
+
+    void CanBus::stop_all_drivers() {
+        if (!_ready) {
+            log_info("CAN stop: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_stop_now_command(0, request, sizeof(request));
+        if (!len) {
+            return;
+        }
+        log_warn("CAN: broadcasting immediate stop (0xFC); clear the state afterwards to avoid motor heating");
+        send_message(request, len, 100);
+        flush_receive();
+    }
+
+    void CanBus::read_raw(uint8_t address, uint8_t function) {
+        if (!_ready) {
+            log_info("CAN read: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_read_command(address, function, request, sizeof(request));
+
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            size_t responseLen = 0;
+            if (transact(request, len, response, sizeof(response), responseLen, 100)) {
+                char text[3 * Pd42s1Protocol::MAX_FRAME_LEN + 1];
+                char* out = text;
+                for (size_t i = 0; i < responseLen; ++i) {
+                    out += snprintf(out, size_t(text + sizeof(text) - out), "%02X ", response[i]);
+                }
+                char funcText[8];
+                snprintf(funcText, sizeof(funcText), "0x%02X", int(function));
+                log_info("CAN read: address " << int(address) << " function " << funcText << " response(" << int(responseLen) << "): "
+                                              << text);
+                return;
+            }
+        }
+        char funcText[8];
+        snprintf(funcText, sizeof(funcText), "0x%02X", int(function));
+        log_warn("CAN read: address " << int(address) << " function " << funcText << ": no response");
     }
 
     void CanBus::restart_drivers() {        if (!_ready) {

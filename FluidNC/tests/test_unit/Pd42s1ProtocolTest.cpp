@@ -203,3 +203,21 @@ TEST(Pd42s1Protocol, ParsesStallAndEnableBytes) {
     EXPECT_TRUE(Pd42s1Protocol::parse_byte_value(enable, sizeof(enable), Pd42s1Protocol::FUNC_READ_ENABLE, value));
     EXPECT_EQ(value, 0);
 }
+
+TEST(Pd42s1Protocol, ParsesSpeedAndPositionError) {
+    // Manual 4.3.10: C5 01 29 01 00 1F 0F 5C -> 0x001F = 31 RPM.
+    uint8_t speed[8] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_SPEED, Pd42s1Protocol::STATUS_OK, 0x00, 0x1F };
+    finish_response(speed, sizeof(speed));
+    int16_t rpm = 0;
+    EXPECT_EQ(Pd42s1Protocol::expected_response_length(speed, sizeof(speed)), 8u);
+    EXPECT_TRUE(Pd42s1Protocol::parse_int16_value(speed, sizeof(speed), Pd42s1Protocol::FUNC_READ_SPEED, rpm));
+    EXPECT_EQ(rpm, 31);
+
+    // Manual 4.3.12: C5 01 2B 01 00 00 00 01 F3 5C -> position error 1.
+    uint8_t error[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POS_ERROR, Pd42s1Protocol::STATUS_OK, 0x00, 0x00, 0x00, 0x01 };
+    finish_response(error, sizeof(error));
+    int32_t err = 0;
+    EXPECT_EQ(Pd42s1Protocol::expected_response_length(error, sizeof(error)), 10u);
+    EXPECT_TRUE(Pd42s1Protocol::parse_int32_value(error, sizeof(error), Pd42s1Protocol::FUNC_READ_POS_ERROR, err));
+    EXPECT_EQ(err, 1);
+}

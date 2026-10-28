@@ -94,7 +94,11 @@ namespace MotorDrivers {
             case FUNC_READ_VERSION:
                 return 8;  // status + firmware version + hardware version
             case FUNC_READ_POSITION:
-                return 10;  // status + 4-byte position
+            case FUNC_READ_PULSES:
+            case FUNC_READ_POS_ERROR:
+                return 10;  // status + 4-byte value
+            case FUNC_READ_SPEED:
+                return 8;  // status + 2-byte signed speed
             case FUNC_READ_STATUS:
                 return 7;  // status + 1-byte motor status
             case FUNC_READ_STALL:
@@ -138,10 +142,22 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_position(const uint8_t* frame, size_t len, int32_t& position) {
-        if (len != 10 || frame[2] != FUNC_READ_POSITION || !valid_response(frame, len)) {
+        return parse_int32_value(frame, len, FUNC_READ_POSITION, position);
+    }
+
+    bool Pd42s1Protocol::parse_int32_value(const uint8_t* frame, size_t len, uint8_t function, int32_t& value) {
+        if (len != 10 || frame[2] != function || !valid_response(frame, len)) {
             return false;
         }
-        position = int32_t((uint32_t(frame[4]) << 24) | (uint32_t(frame[5]) << 16) | (uint32_t(frame[6]) << 8) | uint32_t(frame[7]));
+        value = int32_t((uint32_t(frame[4]) << 24) | (uint32_t(frame[5]) << 16) | (uint32_t(frame[6]) << 8) | uint32_t(frame[7]));
+        return true;
+    }
+
+    bool Pd42s1Protocol::parse_int16_value(const uint8_t* frame, size_t len, uint8_t function, int16_t& value) {
+        if (len != 8 || frame[2] != function || !valid_response(frame, len)) {
+            return false;
+        }
+        value = int16_t((uint16_t(frame[4]) << 8) | uint16_t(frame[5]));
         return true;
     }
 
