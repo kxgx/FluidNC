@@ -43,6 +43,10 @@
 
 #include <Arduino.h>  // PIN_LED
 
+#if defined(ESP32)
+#    include "driver/gpio.h"  // gpio_set_pull_mode() for the bit-bang I2C scan
+#endif
+
 #if MAX_N_I2C
 #    include "Driver/fluidnc_i2c.h"  // i2c_write(), i2c_master_init()
 #    include "Machine/I2CBus.h"
@@ -1073,23 +1077,115 @@ static Error list_parameters(const char* value, AuthenticationLevel auth_level, 
 }
 
 #if MAX_N_I2C
-// Scan one I2C bus, in ascending or descending address order.  A zero-length
-// write is used as a probe: it transfers only the address byte, so the device
-// responds with ACK if it is present.
-static int scan_i2c_range(objnum_t bus_number, bool backwards) {
-    int     found    = 0;
-    uint8_t probe[1] = { 0 };
-    int     first    = backwards ? 0x77 : 0x03;
-    int     last     = backwards ? 0x02 : 0x78;
-    int     step     = backwards ? -1 : 1;
+#if defined(ESP32)
+// Software ("bit-bang") I2C probe, independent of the Arduino Wire driver.
+// It can tell a real NACK (no device) apart from a driver-level transaction
+// error, which is useful when the hardware I2C driver reports only errors.
+static void bb_delay() { delayMicroseconds(5); }
+static void bb_set(pinnum_t pin, int level) { digitalWrite(pin, level); }
+
+static void bb_start(pinnum_t sda, pinnum_t scl) {
+    bb_set(sda, 1);
+    bb_set(scl, 1);
+    bb_delay();
+    bb_set(sda, 0);
+    bb_delay();
+    bb_set(scl, 0);
+    bb_delay();
+}
+
+static void bb_stop(pinnum_t sda, pinnum_t scl) {
+    bb_set(sda, 0);
+    bb_delay();
+    bb_set(scl, 1);
+    bb_delay();
+    bb_set(sda, 1);
+    bb_delay();
+}
+
+// Returns true when the addressed device acknowledged.
+static bool bb_write_byte(pinnum_t sda, pinnum_t scl, uint8_t value) {
+    for (int bit = 7; bit >= 0; --bit) {
+        bb_set(sda, (value >> bit) & 1);
+        bb_delay();
+        bb_set(scl, 1);
+        bb_delay();
+        bb_set(scl, 0);
+        bb_delay();
+    }
+    bb_set(sda, 1);
+    bb_delay();
+    bb_set(scl, 1);
+    bb_delay();
+    bool ack = digitalRead(sda) == 0;
+    bb_set(scl, 0);
+    bb_delay();
+    return ack;
+}
+
+static int bb_scan_pins(pinnum_t sda, pinnum_t scl, bool backwards) {
+    pinMode(sda, OUTPUT_OPEN_DRAIN);
+    pinMode(scl, OUTPUT_OPEN_DRAIN);
+    gpio_set_pull_mode((gpio_num_t)sda, GPIO_PULLUP_ONLY);
+    gpio_set_pull_mode((gpio_num_t)scl, GPIO_PULLUP_ONLY);
+    bb_set(sda, 1);
+    bb_set(scl, 1);
+    delay(2);
+
+    int found = 0;
+    int first = backwards ? 0x77 : 0x03;
+    int last  = backwards ? 0x02 : 0x78;
+    int step  = backwards ? -1 : 1;
     for (int address = first; address != last; address += step) {
-        if (i2c_write(bus_number, uint8_t(address), probe, 0) == 0) {
-            log_info("  I2C device at " << to_hex(uint32_t(address)));
+        bb_start(sda, scl);
+        bool ack = bb_write_byte(sda, scl, uint8_t(address << 1));
+        bb_stop(sda, scl);
+        if (ack) {
+            log_info("  bit-bang device at " << to_hex(uint32_t(address)));
             ++found;
         }
     }
     if (!found) {
         log_info("  (no devices)");
+    }
+    return found;
+}
+#endif
+// Scan one I2C bus, in ascending or descending address order.  A zero-length
+// write is used as a probe: it transfers only the address byte, so the device
+// responds with ACK if it is present.
+static int scan_i2c_range(objnum_t bus_number, bool backwards) {
+    int     found    = 0;
+    int     nack     = 0;
+    int     other    = 0;
+    int     firstErr = 0;
+    uint8_t probe[1] = { 0 };
+    int     first    = backwards ? 0x77 : 0x03;
+    int     last     = backwards ? 0x02 : 0x78;
+    int     step     = backwards ? -1 : 1;
+    for (int address = first; address != last; address += step) {
+        // One data byte, not a zero-length write: the Arduino Wire HAL has
+        // problems with zero-size transactions, which show up as timeouts
+        // instead of the expected ACK/NACK.
+        int rc = i2c_write(bus_number, uint8_t(address), probe, 1);
+        if (rc == 0) {
+            log_info("  I2C device at " << to_hex(uint32_t(address)));
+            ++found;
+        } else if (rc == 2 || rc == -2 || rc == 3 || rc == -3) {
+            ++nack;  // address or data NACK: the bus works, nothing is there
+        } else {
+            if (!firstErr) {
+                firstErr = rc;
+            }
+            ++other;  // bus/driver error, e.g. no pullups or lines stuck
+        }
+    }
+    if (!found) {
+        log_info("  (no devices)");
+    }
+    log_info("  probe results: ack=" << found << " nack=" << nack << " other=" << other);
+    if (firstErr) {
+        log_info("  first non-NACK error code: " << firstErr);
     }
     return found;
 }
@@ -1103,8 +1199,13 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
         }
         any = true;
 
+        auto caps   = Pin::Capabilities::Native | Pin::Capabilities::Input | Pin::Capabilities::Output;
+        auto sdaNum = i2c->_sda.getNative(caps);
+        auto sclNum = i2c->_scl.getNative(caps);
+
         log_info("I2C" << bus << " scan (normal) SDA:" << i2c->_sda.name() << " SCL:" << i2c->_scl.name()
                        << " freq:" << i2c->_frequency);
+        log_info(" idle levels: SDA=" << digitalRead(sdaNum) << " SCL=" << digitalRead(sclNum));
         log_info(" forward:");
         scan_i2c_range(bus, false);
         log_info(" reverse:");
@@ -1115,9 +1216,8 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
             // "Reverse" wiring probe: run the same two scans on a second,
             // otherwise-unused I2C controller with SDA and SCL exchanged, so
             // the already-configured bus 0 is not disturbed.
-            auto caps = Pin::Capabilities::Native | Pin::Capabilities::Input | Pin::Capabilities::Output;
-            auto sda  = i2c->_sda.getNative(caps);
-            auto scl  = i2c->_scl.getNative(caps);
+            auto sda = sdaNum;
+            auto scl = sclNum;
 
             log_info("I2C0 scan (SDA/SCL swapped) on bus 1 SDA:" << i2c->_scl.name() << " SCL:" << i2c->_sda.name());
             i2c_master_init(1, scl, sda, i2c->_frequency);
@@ -1127,6 +1227,20 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
             scan_i2c_range(1, true);
         }
 #    endif
+#if defined(ESP32)
+        if (bus == 0) {
+            log_info("I2C0 software (bit-bang) scan, normal pins");
+            log_info(" forward:");
+            bb_scan_pins(sdaNum, sclNum, false);
+            log_info(" reverse:");
+            bb_scan_pins(sdaNum, sclNum, true);
+            log_info("I2C0 software (bit-bang) scan, SDA/SCL swapped");
+            log_info(" forward:");
+            bb_scan_pins(sclNum, sdaNum, false);
+            log_info(" reverse:");
+            bb_scan_pins(sclNum, sdaNum, true);
+        }
+#endif
     }
     if (!any) {
         log_info("I2C scan: no I2C bus configured");

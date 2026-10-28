@@ -8,8 +8,9 @@
 
 bool i2c_master_init(objnum_t bus_number, pinnum_t sda_pin, pinnum_t scl_pin, uint32_t frequency) {
     TwoWire& i2c = bus_number ? Wire1 : Wire;
-    i2c.begin(int(sda_pin), int(scl_pin), frequency);
-    return false;
+    bool     ok  = i2c.begin(int(sda_pin), int(scl_pin), frequency);
+    log_info("I2C bus " << bus_number << " init " << (ok ? "OK" : "FAILED"));
+    return !ok;
 };
 int i2c_write(objnum_t bus_number, uint8_t address, const uint8_t* data, size_t count) {
     TwoWire& i2c = bus_number ? Wire1 : Wire;
