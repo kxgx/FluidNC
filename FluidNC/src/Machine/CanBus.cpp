@@ -24,6 +24,11 @@ namespace Machine {
             return uint32_t(esp_timer_get_time() / 1000);
         }
 
+        uint32_t twai_tx_error_counter() {
+            twai_status_info_t status;
+            return twai_get_status_info(&status) == ESP_OK ? status.tx_error_counter : 0;
+        }
+
         const char* twai_state_name(twai_state_t state) {
             switch (state) {
                 case TWAI_STATE_STOPPED:
@@ -404,6 +409,24 @@ namespace Machine {
         return true;
     }
 
+    void CanBus::send_echo_enable() {
+        // Broadcast (address 0) "set command echo = acknowledge" (0x6F = 0).
+        // Broadcast commands are executed but not answered, so this can
+        // re-enable responses on a driver that was left at 0x6F = 1 without
+        // needing to know whether it answers.  It also tells whether any node
+        // is electrically present: a present receiver ACKs the frame even if
+        // it does not send a response.
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t echo = 0;  // 0 = acknowledge commands
+        size_t  len  = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
+        if (len) {
+            log_info("CAN scan: enabling command echo (broadcast 0x6F=0)");
+            send_message(request, len, 50);
+            vTaskDelay(pdMS_TO_TICKS(2));
+        }
+        flush_receive();
+    }
+
     int CanBus::scan_address(uint8_t address, uint32_t timeout_ms) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -447,7 +470,13 @@ namespace Machine {
         // Discard any frames that are still queued from earlier transactions.
         flush_receive();
 
-        int found = scan_addresses();
+        uint32_t tecBefore = twai_tx_error_counter();
+        send_echo_enable();
+        int      found    = scan_addresses();
+        uint32_t tecAfter = twai_tx_error_counter();
+        log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
+                                  << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
+                                                             : " (no ACK - check driver power, wiring and bit rate)"));
         return found;
     }
 
@@ -495,7 +524,13 @@ namespace Machine {
                 _ready = true;
                 log_info("CAN scan at " << baud << " baud:");
                 flush_receive();
+                uint32_t tecBefore = twai_tx_error_counter();
+                send_echo_enable();
                 total += scan_addresses();
+                uint32_t tecAfter = twai_tx_error_counter();
+                log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
+                                          << (tecAfter == tecBefore ? " (frames were ACKed by a node)"
+                                                                     : " (no ACK - check driver power, wiring and bit rate)"));
                 twai_stop();
                 twai_driver_uninstall();
                 _ready = false;

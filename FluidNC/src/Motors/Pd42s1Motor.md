@@ -111,11 +111,15 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
    common ground.  The SN65HVD230 `Rs` pin must be tied to GND for high-speed
    mode (or through 10k..100k for slope control).
 6. Diagnostics:
-   * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters, and
-     version reads at addresses 1..8 at the configured bit rate.
-   * `$CANScan=all` -- repeats the address scan at 125k, 250k, 500k and 1 Mbps
-     (useful when the driver bit rate is unknown); restores the configured bit
-     rate and restarts the CAN worker afterwards.
+   * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters,
+     broadcast `0x6F = 0` (re-enable command echo on a driver that was set to
+     "no reply"), then version reads at addresses 1..8 at the configured bit
+     rate.  The reported `TWAI tx_err before -> after` tells whether any node
+     ACKed the frames: `0 -> 0` means a powered node is present, an increase
+     means nobody ACKed (check power, CANH/CANL wiring and bit rate).
+   * `$CANScan=all` -- repeats the echo/address scan at 125k, 250k, 500k and
+     1 Mbps (useful when the driver bit rate is unknown); restores the
+     configured bit rate and restarts the CAN worker afterwards.
    * `$CANSweep` -- brute-force search for the transceiver D/R pins by pulling
      each candidate GPIO low.  Bench/debug only: it briefly drives pins that
      may be limit switches, STEP/DIR or enable lines.

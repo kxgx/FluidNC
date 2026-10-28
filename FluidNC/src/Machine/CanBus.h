@@ -125,6 +125,7 @@ namespace Machine {
         bool        install_driver();
         void        start_worker();
         bool        test_transceiver();
+        void        send_echo_enable();
         int         scan_addresses();
         int         scan_address(uint8_t address, uint32_t timeout_ms);
         bool        transact(
