@@ -809,13 +809,13 @@ namespace Machine {
     void CanBus::enable_all_driver_echo() {
         if (!driver_ok("echo")) return;
         if (!_ready) {
-            log_info("CAN echo: bus not ready");
+            can_log_info("CAN echo: bus not ready");
             return;
         }
         Lock lock(*this);
         enable_all_driver_echo_locked();
         _last_all_echo_ms = now_ms();
-        log_info("CAN echo: sent 0x6F=0 to addresses 1..8");
+        can_log_info("CAN echo: sent 0x6F=0 to addresses 1..8");
     }
 
     void CanBus::ensure_driver_echo() {
