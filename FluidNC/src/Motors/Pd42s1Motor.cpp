@@ -30,10 +30,11 @@ namespace MotorDrivers {
         // Fast final-position verification.  After the final target has been
         // acknowledged, read the actual driver position and resend the target
         // until it is within this many driver units (51200 units/rev).
-        constexpr uint32_t VERIFY_DELAY_MS      = 30;
-        constexpr uint32_t VERIFY_RETRY_MS      = 10;
-        constexpr uint8_t  VERIFY_MAX_ATTEMPTS  = 20;
+        constexpr uint32_t VERIFY_DELAY_MS      = 50;
+        constexpr uint32_t VERIFY_RETRY_MS      = 50;
+        constexpr uint8_t  VERIFY_MAX_ATTEMPTS  = 3;
         constexpr int32_t  VERIFY_TOLERANCE     = 16;
+        constexpr uint32_t VERIFY_TIMEOUT_MS    = 15;
 
         uint32_t now_ms() {
             return uint32_t(esp_timer_get_time() / 1000);
@@ -454,19 +455,14 @@ namespace MotorDrivers {
                Pd42s1Protocol::parse_position(response, responseLen, position);
     }
 
-    bool Pd42s1Motor::read_in_position(bool& inPosition) {
+    bool Pd42s1Motor::read_position_quick(int32_t& position) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  responseLen = 0;
-        uint8_t value       = 0;
 
-        size_t len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_IN_POSITION, request, sizeof(request));
-        if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
-            !Pd42s1Protocol::parse_byte_value(response, responseLen, Pd42s1Protocol::FUNC_READ_IN_POSITION, value)) {
-            return false;
-        }
-        inPosition = value != 0;
-        return true;
+        size_t len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+        return transact_retry(request, len, response, sizeof(response), responseLen, VERIFY_TIMEOUT_MS, 1) &&
+               Pd42s1Protocol::parse_position(response, responseLen, position);
     }
 
     void Pd42s1Motor::verify_final_position(uint32_t nowMs) {
@@ -474,30 +470,11 @@ namespace MotorDrivers {
             return;
         }
 
-        // While the driver is still moving, just wait; re-sending a target
-        // during deceleration only adds bus traffic.  Once it reports
-        // in-position, compare the actual position and only re-send if the
-        // final value is actually wrong.
-        bool inPosition = false;
-        bool haveInPosition = read_in_position(inPosition);
-        if (haveInPosition && !inPosition) {
-            if (++_verifyAttempts > VERIFY_MAX_ATTEMPTS) {
-                _verifyPending    = false;
-                _finalTargetAcked = false;
-                _synced           = false;
-                warn_throttled(nowMs, "final position verification failed; resynchronising");
-            } else {
-                _nextVerifyMs = nowMs + VERIFY_RETRY_MS;
-            }
-            return;
-        }
-
         int32_t actual = 0;
-        if (read_position(actual)) {
+        if (read_position_quick(actual)) {
             _driverPosition = actual;
             _online         = true;
-            // Compare modulo 2^32: the driver's position counter wraps.
-            int32_t error = int32_t(uint32_t(actual) - _lastTarget);
+            int32_t error   = int32_t(uint32_t(actual) - _lastTarget);
             if (error >= -VERIFY_TOLERANCE && error <= VERIFY_TOLERANCE) {
                 _verifyPending    = false;
                 _finalTargetAcked = true;
@@ -505,20 +482,19 @@ namespace MotorDrivers {
             }
         }
 
-        if (++_verifyAttempts > VERIFY_MAX_ATTEMPTS) {
-            _verifyPending     = false;
-            _finalTargetAcked  = false;
-            _synced            = false;
-            warn_throttled(nowMs, "final position verification failed; resynchronising");
+        if (++_verifyAttempts >= VERIFY_MAX_ATTEMPTS) {
+            // Give up quietly; retrying forever would starve the CAN worker
+            // and the normal status poll.  The next move will try again.
+            _verifyPending    = false;
+            _finalTargetAcked = true;
             return;
         }
 
-        // The target command is idempotent; re-send it and read back again.
-        if (send_target(_lastTarget, TRANSACTION_TIMEOUT_MS)) {
-            _finalTargetAcked = true;
-        }
-        _verifyPending = true;
-        _nextVerifyMs  = nowMs + VERIFY_RETRY_MS;
+        // Re-send the idempotent absolute target, then check again after the
+        // configured settle interval.  This is deliberately a slow retry; the
+        // normal position stream is not delayed by it.
+        send_target(_lastTarget, TRANSACTION_TIMEOUT_MS);
+        _nextVerifyMs = nowMs + VERIFY_RETRY_MS;
     }
 
     void Pd42s1Motor::poll_position() {
