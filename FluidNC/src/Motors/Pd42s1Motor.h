@@ -131,6 +131,7 @@ namespace MotorDrivers {
         void     verify_final_position(uint32_t nowMs);
         void     poll_position();
         uint32_t target_position() const;
+        uint32_t planner_target_position() const;
         void     warn_throttled(uint32_t nowMs, const char* message);
 
         Machine::CanBus* _bus = nullptr;
@@ -166,6 +167,7 @@ namespace MotorDrivers {
         uint32_t _lastWarnMs     = 0;
         uint32_t _basePosition   = 0;
         int32_t  _baseStepCount  = 0;  // step counter value at the last sync
+        int32_t  _basePlannerSteps = 0;  // planner step position at the last sync
         uint32_t _lastTarget     = 0;
         uint32_t _lastTargetChangeMs = 0;
         bool     _finalTargetAcked   = false;

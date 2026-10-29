@@ -10,6 +10,7 @@
 #    include "Machine/MachineConfig.h"
 #    include "Motors/Pd42s1Protocol.h"
 #    include "Stepping.h"
+#    include "System.h"
 
 #    include <esp_timer.h>
 
@@ -165,6 +166,20 @@ namespace MotorDrivers {
         int64_t delta = int64_t(llround(scaled));
         // The driver position wraps at 2^32; truncating the sum to uint32_t
         // implements that wrap without signed-overflow undefined behavior.
+        return uint32_t(uint64_t(int64_t(_basePosition) + delta));
+    }
+
+    uint32_t Pd42s1Motor::planner_target_position() const {
+        // The step ISR count can lag the planner at very high step rates.  At
+        // the end of a move (target unchanged for 50 ms) use the planner's
+        // authoritative step position for the final absolute target so a lost
+        // step event cannot leave the driver short.
+        steps_t steps  = get_steps()[axis_index()] - _basePlannerSteps;
+        double  scaled = double(steps) * double(_countsPerStep);
+        if (_invertDirection) {
+            scaled = -scaled;
+        }
+        int64_t delta = int64_t(llround(scaled));
         return uint32_t(uint64_t(int64_t(_basePosition) + delta));
     }
 
@@ -336,6 +351,7 @@ namespace MotorDrivers {
 
         _basePosition     = _everSynced ? continuityTarget : uint32_t(position);
         _baseStepCount    = _stepCount;
+        _basePlannerSteps = get_steps()[axis_index()];
         _lastTarget       = _basePosition;
         _driverPosition   = position;
         _targetDirty      = true;
@@ -575,8 +591,16 @@ namespace MotorDrivers {
                 } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
                     // Motion has stopped; re-send the final target with an
                     // acknowledgement so a dropped fire-and-forget frame
-                    // cannot leave the axis a few millimetres short.
-                    if (send_target(target, TRANSACTION_TIMEOUT_MS)) {
+                    // cannot leave the axis a few millimetres short.  Use the
+                    // planner's step position here: at high step rates the ISR
+                    // counter can miss the last few events.
+                    uint32_t finalTarget = planner_target_position();
+                    if (finalTarget != _lastTarget) {
+                        _lastTargetChangeMs = nowMs;
+                        _verifyPending      = false;
+                        _verifyAttempts     = 0;
+                    }
+                    if (send_target(finalTarget, TRANSACTION_TIMEOUT_MS)) {
                         _finalTargetAcked = true;
                         _verifyPending    = true;
                         _verifyAttempts   = 0;
