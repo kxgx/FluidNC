@@ -148,8 +148,10 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
      driver reset too).
    * `$CANPos` -- read actual position (0x2A), position error (0x2B), speed
      (0x29) and in-position flag (0x30) for every answering driver.
-   * `$CANStop` -- broadcast the immediate-brake command (0xFC); this stops all
-     motion.  Clear the state afterwards (`$CANClear`) to avoid motor heating.
+   * `$CANStop` -- safe stop: broadcast motor disable (`0xFA=1`).  The 0xFC
+     immediate-brake command is intentionally not used because its brake state
+     cannot be cleared safely on firmware V1.6 (broadcast 0xFB locks all
+     drivers until power cycle).
    * `$CANRead` -- raw read, e.g. `$CANRead=1,0x2C` (address,function): sends
      one read command and prints the response bytes in hex.
    * `$CANReset` -- broadcast the driver reset command (0x02), wait 2.5 s and
@@ -168,10 +170,10 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
 7. If `$CANScan` reports `transceiver detected` but `(no devices)` and the TWAI
    state is `bus-off`, no other node is acknowledging: check driver power,
    CANH/CANL wiring, termination and the driver's bit rate.
-8. Direction: the `pd42s1` profile currently sends direction byte 0 in every
-   `0xF2` (absolute position) command.  Before running negative moves, jog a
-   single motor a small amount in both directions and confirm the sign
-   convention; this is a known open item (see the code review report).
+8. Direction: the `pd42s1` profile sets the `0xF2` direction byte from the
+   sign of the absolute target (0 = forward, 1 = reverse).  The vendor example
+   only shows positive targets, so verify with a small +X / -X jog on one
+   motor before relying on negative moves.
 
 
 ## CAN bit rate auto-configuration
@@ -182,7 +184,9 @@ boot the firmware:
 1. probes every PD42S1 rate (125k/250k/500k/1 Mbps) with echo enabled,
 2. if drivers answer at another rate, broadcasts `0x68` (new rate in kbps) at
    that rate, then sends an addressed `0x68` + `0x04` (save) to every detected
-   driver and reads 0x32 back to confirm the saved rate,
+   driver and reads 0x32 back to confirm the saved rate.  If 0x32 already
+   shows the target rate, the write is skipped so the driver NVRAM is not
+   rewritten on every boot,
 3. confirms that every configured `pd42s1` motor answers at the configured
    rate; on a mismatch it warns and leaves echo enabled,
 4. on full success disables echo again (motor sync re-enables it before
@@ -214,7 +218,7 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 | M154 | per-driver position/error/speed/in-position (`$CANPos`) |
 | M155 | release stall protection (0xF9, per address) |
 | M156 | broadcast + addressed `0x6F=0` (enable command echo) |
-| M157 | immediate stop (0xFC broadcast; clear the state afterwards) |
+| M157 | safe stop: broadcast motor disable (0xFA=1; 0xFC brake disabled) |
 | M158 | restart drivers (0x02 broadcast, bench recovery only) |
 | M159 | raw read; `M159 P<address> Q<function>` e.g. `M159 P1 Q44` (0x2C) |
 | M160 | run CAN bit-rate/echo auto-configuration |

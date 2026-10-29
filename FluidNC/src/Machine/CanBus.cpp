@@ -348,6 +348,13 @@ namespace Machine {
             if (!read_driver_config(address, currentBaud, currentEcho, currentMode)) {
                 continue;
             }
+            if (currentBaud == uint16_t(target / 1000)) {
+                // Already correct: do not rewrite the driver's NVRAM on every
+                // boot.  Echo/baud were confirmed above.
+                savedOk++;
+                log_info("CAN: address " << int(address) << " already saved CAN baud=" << currentBaud << " kbps; skip write");
+                continue;
+            }
             uint8_t request2[Pd42s1Protocol::MAX_FRAME_LEN];
             uint8_t response2[64];
             size_t  len2 = Pd42s1Protocol::build_set_can_baud_command(address, uint16_t(target / 1000), request2, sizeof(request2));
@@ -1271,12 +1278,17 @@ namespace Machine {
         }
         Lock lock(*this);
 
+        // Safe stop = disable all motor outputs.  The 0xFC immediate-brake
+        // command is deliberately NOT used: on firmware V1.6 the brake state
+        // can only be cleared with 0xFB, and a broadcast 0xFB leaves all
+        // drivers silent until they are power cycled (bench-tested).
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        size_t  len = Pd42s1Protocol::build_stop_now_command(0, request, sizeof(request));
+        uint8_t disable = 1;
+        size_t  len     = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, &disable, 1, request, sizeof(request));
         if (!len) {
             return;
         }
-        log_warn("CAN: broadcasting immediate stop (0xFC); clear the state afterwards to avoid motor heating");
+        log_warn("CAN: safe stop: broadcasting motor disable (0xFA=1); 0xFC brake is disabled for safety");
         send_message(request, len, 100);
         flush_receive();
     }

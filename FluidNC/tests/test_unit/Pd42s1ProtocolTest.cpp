@@ -42,7 +42,7 @@ TEST(Pd42s1Protocol, BuildsPositionCommand) {
     EXPECT_EQ(frame[0], 0xC5);
     EXPECT_EQ(frame[1], 2);
     EXPECT_EQ(frame[2], Pd42s1Protocol::FUNC_POSITION_MODE);
-    EXPECT_EQ(frame[3], 0);     // absolute target decides the direction
+    EXPECT_EQ(frame[3], 0);     // positive target -> forward
     EXPECT_EQ(frame[4], 200);   // accel
     EXPECT_EQ(frame[5], 0x02);  // speed 600 = 0x0258, big endian
     EXPECT_EQ(frame[6], 0x58);
@@ -52,6 +52,19 @@ TEST(Pd42s1Protocol, BuildsPositionCommand) {
     EXPECT_EQ(frame[10], 0x00);
     EXPECT_EQ(frame[11], Pd42s1Protocol::checksum(frame.data(), 11));
     EXPECT_EQ(frame[12], 0x5C);
+}
+
+TEST(Pd42s1Protocol, NegativePositionSetsReverseDirectionByte) {
+    std::array<uint8_t, Pd42s1Protocol::MAX_FRAME_LEN> frame {};
+    // -12345 = 0xFFFFCFC7 as a two's-complement target.
+    size_t len = Pd42s1Protocol::build_position_command(1, 200, 600, uint32_t(int32_t(-12345)), frame.data(), frame.size());
+
+    ASSERT_EQ(len, 13u);
+    EXPECT_EQ(frame[3], 1);  // reverse
+    EXPECT_EQ(frame[7], 0xFF);
+    EXPECT_EQ(frame[8], 0xFF);
+    EXPECT_EQ(frame[9], 0xCF);
+    EXPECT_EQ(frame[10], 0xC7);
 }
 
 TEST(Pd42s1Protocol, BuildsEnableCommand) {
