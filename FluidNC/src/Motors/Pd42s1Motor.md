@@ -79,6 +79,23 @@ streamed positions; they must be at least the axis's real maximum speed and
 acceleration, or the motor will lag behind the commanded position.  The
 firmware sends a new absolute position every `update_ms`.
 
+At startup the firmware derives the RPM needed by the axis from:
+
+    required_rpm = max_rate_mm_per_min * steps_per_mm * counts_per_step / 51200
+
+If `speed_rpm` is lower than that, it is raised silently; if the required
+RPM exceeds the PD42S1 limit of 6000, it is clamped to 6000.  With
+60000 mm/min, 80 steps/mm and `counts_per_step: 16`, the requirement is
+1500 RPM.
+
+The same conversion is applied to acceleration:
+
+    required_accel_rev_s2 = acceleration_mm_per_sec2 * steps_per_mm * counts_per_step / 51200
+
+and `accel` is raised silently (up to 200) if it is too low.  All of this is
+internal to the PD42S1 driver; the G-code/planner side and `$110/$111/$112`
+are unchanged.
+
 Position targets are streamed **without waiting for the driver's reply**
 (fire-and-forget), because waiting for an acknowledgement on every update adds
 latency and jitter and makes a loaded axis stutter.  When the target has not

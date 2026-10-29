@@ -81,7 +81,9 @@ namespace MotorDrivers {
             // Speed in RPM that the driver is allowed to use while following
             // the position stream.  Must be at least the axis's maximum speed
             // (max_rate_mm_per_min converted to motor RPM) or the motor will
-            // lag behind the commanded position.
+            // lag behind the commanded position.  The firmware derives the
+            // required RPM from max_rate_mm_per_min, steps_per_mm and
+            // counts_per_step and raises this value if it is too low.
             handler.item("speed_rpm", _speedRpm, 1, 6000);
 
             // @config accel
@@ -90,7 +92,9 @@ namespace MotorDrivers {
             // Acceleration in revolutions/second^2 (0..200) that the driver is
             // allowed to use while following the position stream.  The
             // firmware streams small position increments, so a high value here
-            // keeps the motor tracking closely.
+            // keeps the motor tracking closely.  The firmware derives the
+            // required value from acceleration_mm_per_sec2, steps_per_mm and
+            // counts_per_step and raises this value if it is too low.
             handler.item("accel", _accel, 0, 200);
 
             // @config update_ms

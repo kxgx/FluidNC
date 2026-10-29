@@ -78,6 +78,35 @@ namespace MotorDrivers {
         Assert(_speedRpm >= 1 && _speedRpm <= 6000, "pd42s1 speed_rpm must be 1..6000");
         Assert(_accel >= 0 && _accel <= 200, "pd42s1 accel must be 0..200");
         Assert(_updateMs >= 2 && _updateMs <= 1000, "pd42s1 update_ms must be 2..1000");
+
+        // Derive the driver RPM and acceleration silently from the axis
+        // settings.  The G-code/planner side is untouched; this keeps the
+        // driver's internal following limits consistent with whatever maximum
+        // feed rate and acceleration the axis is configured for.
+        //
+        //   driver units/mm = steps_per_mm * counts_per_step
+        //   driver units/min = max_rate_mm_per_min * driver units/mm
+        //   driver RPM = driver units/min / 51200
+        auto  axisConfig  = Axes::_axis[axis_index()];
+        float requiredRpm = axisConfig->_maxRate * axisConfig->_stepsPerMm * _countsPerStep / 51200.0f;
+        if (requiredRpm > 6000.0f) {
+            _speedRpm = 6000;
+        } else {
+            int required = int(std::ceil(requiredRpm));
+            if (required > _speedRpm) {
+                _speedRpm = required;
+            }
+        }
+
+        float requiredAccel = axisConfig->_acceleration * axisConfig->_stepsPerMm * _countsPerStep / 51200.0f;
+        if (requiredAccel > 200.0f) {
+            _accel = 200;
+        } else {
+            int required = int(std::ceil(requiredAccel));
+            if (required > _accel) {
+                _accel = required;
+            }
+        }
     }
 
     void Pd42s1Motor::config_message() {
