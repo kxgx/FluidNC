@@ -128,6 +128,7 @@ namespace MotorDrivers {
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         bool     send_target_nowait(uint32_t target);
         bool     read_position(int32_t& position);
+        bool     read_in_position(bool& inPosition);
         void     verify_final_position(uint32_t nowMs);
         void     poll_position();
         uint32_t target_position() const;

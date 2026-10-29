@@ -30,10 +30,10 @@ namespace MotorDrivers {
         // Fast final-position verification.  After the final target has been
         // acknowledged, read the actual driver position and resend the target
         // until it is within this many driver units (51200 units/rev).
-        constexpr uint32_t VERIFY_DELAY_MS      = 8;
-        constexpr uint32_t VERIFY_RETRY_MS      = 8;
-        constexpr uint8_t  VERIFY_MAX_ATTEMPTS  = 8;
-        constexpr int32_t  VERIFY_TOLERANCE     = 2;
+        constexpr uint32_t VERIFY_DELAY_MS      = 30;
+        constexpr uint32_t VERIFY_RETRY_MS      = 10;
+        constexpr uint8_t  VERIFY_MAX_ATTEMPTS  = 20;
+        constexpr int32_t  VERIFY_TOLERANCE     = 16;
 
         uint32_t now_ms() {
             return uint32_t(esp_timer_get_time() / 1000);
@@ -454,8 +454,41 @@ namespace MotorDrivers {
                Pd42s1Protocol::parse_position(response, responseLen, position);
     }
 
+    bool Pd42s1Motor::read_in_position(bool& inPosition) {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+        uint8_t value       = 0;
+
+        size_t len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_IN_POSITION, request, sizeof(request));
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
+            !Pd42s1Protocol::parse_byte_value(response, responseLen, Pd42s1Protocol::FUNC_READ_IN_POSITION, value)) {
+            return false;
+        }
+        inPosition = value != 0;
+        return true;
+    }
+
     void Pd42s1Motor::verify_final_position(uint32_t nowMs) {
         if (!_verifyPending || _disabled || !_synced) {
+            return;
+        }
+
+        // While the driver is still moving, just wait; re-sending a target
+        // during deceleration only adds bus traffic.  Once it reports
+        // in-position, compare the actual position and only re-send if the
+        // final value is actually wrong.
+        bool inPosition = false;
+        bool haveInPosition = read_in_position(inPosition);
+        if (haveInPosition && !inPosition) {
+            if (++_verifyAttempts > VERIFY_MAX_ATTEMPTS) {
+                _verifyPending    = false;
+                _finalTargetAcked = false;
+                _synced           = false;
+                warn_throttled(nowMs, "final position verification failed; resynchronising");
+            } else {
+                _nextVerifyMs = nowMs + VERIFY_RETRY_MS;
+            }
             return;
         }
 
@@ -466,14 +499,13 @@ namespace MotorDrivers {
             // Compare modulo 2^32: the driver's position counter wraps.
             int32_t error = int32_t(uint32_t(actual) - _lastTarget);
             if (error >= -VERIFY_TOLERANCE && error <= VERIFY_TOLERANCE) {
-                _verifyPending = false;
+                _verifyPending    = false;
                 _finalTargetAcked = true;
                 return;
             }
         }
 
-        ++_verifyAttempts;
-        if (_verifyAttempts > VERIFY_MAX_ATTEMPTS) {
+        if (++_verifyAttempts > VERIFY_MAX_ATTEMPTS) {
             _verifyPending     = false;
             _finalTargetAcked  = false;
             _synced            = false;
