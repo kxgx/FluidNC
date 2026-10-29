@@ -122,6 +122,7 @@ namespace MotorDrivers {
         bool clear_fault();
         void     apply_disable(uint32_t nowMs);
         bool     send_target(uint32_t target, uint32_t timeoutMs);
+        bool     send_target_nowait(uint32_t target);
         void     poll_position();
         uint32_t target_position() const;
         void     warn_throttled(uint32_t nowMs, const char* message);
@@ -160,6 +161,8 @@ namespace MotorDrivers {
         uint32_t _basePosition   = 0;
         int32_t  _baseStepCount  = 0;  // step counter value at the last sync
         uint32_t _lastTarget     = 0;
+        uint32_t _lastTargetChangeMs = 0;
+        bool     _finalTargetAcked   = false;
         bool     _targetDirty    = true;
         int32_t  _driverPosition = 0;
 

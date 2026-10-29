@@ -423,6 +423,38 @@ namespace MotorDrivers {
         log_warn("CAN: " << name() << " address:" << _address << ": " << message);
     }
 
+    bool Pd42s1Motor::send_target_nowait(uint32_t target) {
+        // Fire-and-forget target streaming: waiting for the driver's
+        // acknowledgement every update adds latency and jitter, which makes
+        // loaded axes visibly stutter.  Position commands are idempotent
+        // absolute targets, so it is safe to send the next one without
+        // reading the previous reply; status polling / resync catches errors.
+        if (!_bus || !_bus->ready()) {
+            _targetDirty = true;
+            return false;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_position_command(
+            uint8_t(_address), uint8_t(_accel), uint16_t(_speedRpm), target, request, sizeof(request));
+        if (!len) {
+            _targetDirty = true;
+            return false;
+        }
+        CanBus::Lock lock(*_bus);
+        _bus->flush_receive();
+        if (!_bus->send_message(request, len, TRANSACTION_TIMEOUT_MS)) {
+            _bus->flush_transmit();
+            _targetDirty = true;
+            _writeFailures++;
+            return false;
+        }
+        _lastTarget   = target;
+        _targetDirty  = false;
+        _online       = true;
+        _writeFailures = 0;
+        return true;
+    }
+
     void Pd42s1Motor::can_poll(uint32_t nowMs) {
         if (!_bus || !_bus->ready()) {
             return;
@@ -449,10 +481,26 @@ namespace MotorDrivers {
 
         if (!_disabled) {
             if (int32_t(nowMs - _nextUpdateMs) >= 0) {
-                _nextUpdateMs   = nowMs + _updateMs;
+                _nextUpdateMs += _updateMs;
+                if (int32_t(nowMs - _nextUpdateMs) > 0) {
+                    // Far behind (bus stall / long transaction): resynchronise
+                    // the cadence instead of bursting several stale targets.
+                    _nextUpdateMs = nowMs + _updateMs;
+                }
                 uint32_t target = target_position();
                 if (_targetDirty || target != _lastTarget) {
-                    send_target(target, TRANSACTION_TIMEOUT_MS);
+                    if (target != _lastTarget) {
+                        _lastTargetChangeMs = nowMs;
+                        _finalTargetAcked   = false;
+                    }
+                    send_target_nowait(target);
+                } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
+                    // Motion has stopped; re-send the final target with an
+                    // acknowledgement so a dropped fire-and-forget frame
+                    // cannot leave the axis a few millimetres short.
+                    if (send_target(target, TRANSACTION_TIMEOUT_MS)) {
+                        _finalTargetAcked = true;
+                    }
                 }
             }
         }

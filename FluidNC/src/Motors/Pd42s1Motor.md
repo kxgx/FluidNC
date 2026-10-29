@@ -69,15 +69,25 @@ The PD42S1 counts 51200 units per revolution, so
     counts_per_step = 51200 / steps_per_revolution_on_the_axis
                     = 51200 / (steps_per_mm * mm_per_revolution)
 
-With 3200 steps/mm on a 5 mm pitch screw the axis has 16000 steps per
-revolution, so `counts_per_step` is 51200 / 16000 = 3.2.  Set it to 1.0 only
+With 80 steps/mm on a 2GT 20T pulley (40 mm/rev) the axis has 3200 steps
+per revolution, so `counts_per_step` is 51200 / 3200 = 16.  Set it to 1.0 only
 when `steps_per_mm` was chosen so that one FluidNC step equals one driver
 position unit.
 
 `speed_rpm` and `accel` are the limits the driver uses while following the
 streamed positions; they must be at least the axis's real maximum speed and
 acceleration, or the motor will lag behind the commanded position.  The
-firmware sends a new absolute position every `update_ms` (default 20 ms).
+firmware sends a new absolute position every `update_ms`.
+
+Position targets are streamed **without waiting for the driver's reply**
+(fire-and-forget), because waiting for an acknowledgement on every update adds
+latency and jitter and makes a loaded axis stutter.  When the target has not
+changed for 50 ms, the final target is sent once with an acknowledgement so a
+dropped frame cannot leave the axis a few millimetres short.  With four motors
+at 500 kbps, `update_ms` of 5-10 ms is the practical range (the CAN worker and
+bus saturate below that).  This is still absolute-position streaming, not
+step/dir: at very high acceleration/speed the motion is less smooth than a
+pulse train; reduce `max_rate`/`acceleration`/driver `accel` if it feels jerky.
 
 ## Limitations
 
