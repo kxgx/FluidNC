@@ -100,16 +100,17 @@ Position targets are streamed **without waiting for the driver's reply**
 (fire-and-forget), because waiting for an acknowledgement on every update adds
 latency and jitter and makes a loaded axis stutter.  When the target has not
 changed for 50 ms, the final target is sent once with an acknowledgement so a
-dropped frame cannot leave the axis a few millimetres short.  After that final
-acknowledgement the driver reads its actual position (`0x2A`) and compares it
-with the commanded position; if the difference is more than 2 driver units the
-target is re-sent and checked again every 8 ms.  This verification runs only
-after the target stops changing, so it does not slow normal streaming; it stops
-after 8 attempts and forces a resync.  With four motors at 500 kbps,
-`update_ms` of 5-10 ms is the practical range (the CAN worker and
-bus saturate below that).  This is still absolute-position streaming, not
-step/dir: at very high acceleration/speed the motion is less smooth than a
-pulse train; reduce `max_rate`/`acceleration`/driver `accel` if it feels jerky.
+dropped frame cannot leave the axis a few millimetres short.  This is delivery
+confirmation only: every CAN frame has the protocol checksum and CAN ACK, and
+the final `0xF2` target additionally requires the driver's application ACK.
+Intermediate targets are idempotent absolute positions, so a lost intermediate
+frame is harmless; only the final target must be acknowledged.  Position
+readback (`$CANPos`) is diagnostic and is not used to servo the target.
+With four motors at 500 kbps, `update_ms` of 5-10 ms is the practical range
+(the CAN worker and bus saturate below that).  This is still absolute-position
+streaming, not step/dir: at very high acceleration/speed the motion is less
+smooth than a pulse train; reduce `max_rate`/`acceleration`/driver `accel` if
+it feels jerky.
 
 ## Limitations
 

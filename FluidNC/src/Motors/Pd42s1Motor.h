@@ -127,12 +127,8 @@ namespace MotorDrivers {
         void     apply_disable(uint32_t nowMs);
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         bool     send_target_nowait(uint32_t target);
-        bool     read_position(int32_t& position);
-        bool     read_position_quick(int32_t& position);
-        void     verify_final_position(uint32_t nowMs);
         void     poll_position();
         uint32_t target_position() const;
-        uint32_t planner_target_position() const;
         void     warn_throttled(uint32_t nowMs, const char* message);
 
         Machine::CanBus* _bus = nullptr;
@@ -168,19 +164,11 @@ namespace MotorDrivers {
         uint32_t _lastWarnMs     = 0;
         uint32_t _basePosition   = 0;
         int32_t  _baseStepCount  = 0;  // step counter value at the last sync
-        int32_t  _basePlannerSteps = 0;  // planner step position at the last sync
         uint32_t _lastTarget     = 0;
         uint32_t _lastTargetChangeMs = 0;
         bool     _finalTargetAcked   = false;
         bool     _targetDirty    = true;
         int32_t  _driverPosition = 0;
-
-        // Fast final-position check: after the last target is acknowledged,
-        // read the driver's actual position and re-send the target until it
-        // matches.  This runs only when the target has stopped changing.
-        bool     _verifyPending  = false;
-        uint32_t _nextVerifyMs   = 0;
-        uint8_t  _verifyAttempts = 0;
 
         // Consecutive failed transactions.  A marginal CAN bus drops the odd
         // response; only after several failures in a row is the driver

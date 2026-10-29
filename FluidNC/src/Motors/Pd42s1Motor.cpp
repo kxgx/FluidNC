@@ -10,7 +10,6 @@
 #    include "Machine/MachineConfig.h"
 #    include "Motors/Pd42s1Protocol.h"
 #    include "Stepping.h"
-#    include "System.h"
 
 #    include <esp_timer.h>
 
@@ -26,15 +25,6 @@ namespace MotorDrivers {
         constexpr uint32_t RETRY_MS               = 500;
         constexpr uint32_t WARN_INTERVAL_MS       = 5000;
         constexpr uint32_t POSITION_UNITS_PER_REV = 51200;
-
-        // Fast final-position verification.  After the final target has been
-        // acknowledged, read the actual driver position and resend the target
-        // until it is within this many driver units (51200 units/rev).
-        constexpr uint32_t VERIFY_DELAY_MS      = 50;
-        constexpr uint32_t VERIFY_RETRY_MS      = 50;
-        constexpr uint8_t  VERIFY_MAX_ATTEMPTS  = 3;
-        constexpr int32_t  VERIFY_TOLERANCE     = 16;
-        constexpr uint32_t VERIFY_TIMEOUT_MS    = 15;
 
         uint32_t now_ms() {
             return uint32_t(esp_timer_get_time() / 1000);
@@ -167,20 +157,6 @@ namespace MotorDrivers {
         int64_t delta = int64_t(llround(scaled));
         // The driver position wraps at 2^32; truncating the sum to uint32_t
         // implements that wrap without signed-overflow undefined behavior.
-        return uint32_t(uint64_t(int64_t(_basePosition) + delta));
-    }
-
-    uint32_t Pd42s1Motor::planner_target_position() const {
-        // The step ISR count can lag the planner at very high step rates.  At
-        // the end of a move (target unchanged for 50 ms) use the planner's
-        // authoritative step position for the final absolute target so a lost
-        // step event cannot leave the driver short.
-        steps_t steps  = get_steps()[axis_index()] - _basePlannerSteps;
-        double  scaled = double(steps) * double(_countsPerStep);
-        if (_invertDirection) {
-            scaled = -scaled;
-        }
-        int64_t delta = int64_t(llround(scaled));
         return uint32_t(uint64_t(int64_t(_basePosition) + delta));
     }
 
@@ -352,7 +328,6 @@ namespace MotorDrivers {
 
         _basePosition     = _everSynced ? continuityTarget : uint32_t(position);
         _baseStepCount    = _stepCount;
-        _basePlannerSteps = get_steps()[axis_index()];
         _lastTarget       = _basePosition;
         _driverPosition   = position;
         _targetDirty      = true;
@@ -445,61 +420,15 @@ namespace MotorDrivers {
         return true;
     }
 
-    bool Pd42s1Motor::read_position(int32_t& position) {
-        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
-        size_t  responseLen = 0;
-
-        size_t len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
-        return transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
-               Pd42s1Protocol::parse_position(response, responseLen, position);
-    }
-
-    bool Pd42s1Motor::read_position_quick(int32_t& position) {
-        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
-        size_t  responseLen = 0;
-
-        size_t len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
-        return transact_retry(request, len, response, sizeof(response), responseLen, VERIFY_TIMEOUT_MS, 1) &&
-               Pd42s1Protocol::parse_position(response, responseLen, position);
-    }
-
-    void Pd42s1Motor::verify_final_position(uint32_t nowMs) {
-        if (!_verifyPending || _disabled || !_synced) {
-            return;
-        }
-
-        int32_t actual = 0;
-        if (read_position_quick(actual)) {
-            _driverPosition = actual;
-            _online         = true;
-            int32_t error   = int32_t(uint32_t(actual) - _lastTarget);
-            if (error >= -VERIFY_TOLERANCE && error <= VERIFY_TOLERANCE) {
-                _verifyPending    = false;
-                _finalTargetAcked = true;
-                return;
-            }
-        }
-
-        if (++_verifyAttempts >= VERIFY_MAX_ATTEMPTS) {
-            // Give up quietly; retrying forever would starve the CAN worker
-            // and the normal status poll.  The next move will try again.
-            _verifyPending    = false;
-            _finalTargetAcked = true;
-            return;
-        }
-
-        // Re-send the idempotent absolute target, then check again after the
-        // configured settle interval.  This is deliberately a slow retry; the
-        // normal position stream is not delayed by it.
-        send_target(_lastTarget, TRANSACTION_TIMEOUT_MS);
-        _nextVerifyMs = nowMs + VERIFY_RETRY_MS;
-    }
-
     void Pd42s1Motor::poll_position() {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+
+        size_t  len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
         int32_t position = 0;
-        if (read_position(position)) {
+        if (transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
+            Pd42s1Protocol::parse_position(response, responseLen, position)) {
             _driverPosition = position;
             _online         = true;
             _readFailures   = 0;
@@ -592,34 +521,17 @@ namespace MotorDrivers {
                     if (target != _lastTarget) {
                         _lastTargetChangeMs = nowMs;
                         _finalTargetAcked   = false;
-                        _verifyPending      = false;
-                        _verifyAttempts     = 0;
                     }
                     send_target_nowait(target);
                 } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
                     // Motion has stopped; re-send the final target with an
                     // acknowledgement so a dropped fire-and-forget frame
-                    // cannot leave the axis a few millimetres short.  Use the
-                    // planner's step position here: at high step rates the ISR
-                    // counter can miss the last few events.
-                    uint32_t finalTarget = planner_target_position();
-                    if (finalTarget != _lastTarget) {
-                        _lastTargetChangeMs = nowMs;
-                        _verifyPending      = false;
-                        _verifyAttempts     = 0;
-                    }
-                    if (send_target(finalTarget, TRANSACTION_TIMEOUT_MS)) {
+                    // cannot leave the axis a few millimetres short.
+                    if (send_target(target, TRANSACTION_TIMEOUT_MS)) {
                         _finalTargetAcked = true;
-                        _verifyPending    = true;
-                        _verifyAttempts   = 0;
-                        _nextVerifyMs     = nowMs + VERIFY_DELAY_MS;
                     }
                 }
             }
-        }
-
-        if (_verifyPending && int32_t(nowMs - _nextVerifyMs) >= 0) {
-            verify_final_position(nowMs);
         }
 
         if (_statusPollMs && int32_t(nowMs - _nextStatusMs) >= 0) {
