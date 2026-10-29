@@ -10,7 +10,6 @@
 #    include "Machine/MachineConfig.h"
 #    include "Motors/Pd42s1Protocol.h"
 #    include "Stepping.h"
-#    include "System.h"
 
 #    include <esp_timer.h>
 
@@ -325,32 +324,13 @@ namespace MotorDrivers {
         // On a resync after a lost command/error, keep the current desired
         // target instead of adopting the driver's (possibly lagging) position,
         // otherwise the axis would silently stop short of the commanded move.
-        // After a disable the motor can be moved by hand; in that case adopt
-        // the actual position and shift the planner so re-enabling does not
-        // snap the axis back to its old target.
         const uint32_t continuityTarget = _everSynced ? target_position() : 0;
-        if (_adoptOnSync) {
-            // The motor may have been moved by hand while disabled.  Shift the
-            // driver base by the planner's current offset so target_position()
-            // returns the actual position immediately, instead of the stale
-            // target that would snap the axis back.
-            int32_t  plannerOffset = int32_t(continuityTarget - _basePosition);
-            uint32_t adoptedBase   = uint32_t(int64_t(position) - int64_t(plannerOffset));
 
-            _basePosition     = adoptedBase;
-            _baseStepCount    = _stepCount;
-            _lastTarget       = uint32_t(position);
-            _targetDirty      = false;
-            _finalTargetAcked = true;
-            _adoptOnSync      = false;
-        } else {
-            _basePosition  = _everSynced ? continuityTarget : uint32_t(position);
-            _baseStepCount = _stepCount;
-            _lastTarget    = _basePosition;
-            _targetDirty   = true;
-        }
-
+        _basePosition     = _everSynced ? continuityTarget : uint32_t(position);
+        _baseStepCount    = _stepCount;
+        _lastTarget       = _basePosition;
         _driverPosition   = position;
+        _targetDirty      = true;
         _disabled         = false;
         _disablePending   = false;
         _disableRequested = false;
@@ -385,16 +365,9 @@ namespace MotorDrivers {
             _online         = true;
             _writeFailures  = 0;
             if (!disable) {
-                // The motor may have been moved by hand while disabled.
-                // Re-read the driver position and adopt it (including the
-                // planner position) instead of re-sending the stale target,
-                // which would snap the axis back to where it was before.
-                if (_everSynced) {
-                    _synced       = false;
-                    _adoptOnSync  = true;
-                    _nextSyncMs   = 0;
-                    _targetDirty  = false;
-                }
+                // Re-send the target after enabling so the driver is not left
+                // holding a stale target from before it was disabled.
+                _targetDirty = true;
             }
             can_log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
         } else {

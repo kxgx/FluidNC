@@ -155,7 +155,6 @@ namespace MotorDrivers {
         // CAN task state
         bool     _synced         = false;
         bool     _everSynced     = false;  // first sync adopts the driver position
-        bool     _adoptOnSync    = false;  // after manual movement while disabled
         bool     _online         = false;
         bool     _disabled       = false;
         uint32_t _nextSyncMs     = 0;
