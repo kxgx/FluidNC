@@ -125,6 +125,10 @@ namespace MotorDrivers {
                 return 6;  // status only
             case FUNC_SET_CAN_BAUD:
                 return 8;  // status + 2-byte bit rate in kbps
+            case 0x31:
+                return 46;  // status + 41-byte system parameter block
+            case 0x32:
+                return 50;  // status + 45-byte driver parameter block
             case FUNC_POSITION_MODE:
                 return 6;  // status only
             default:

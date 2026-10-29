@@ -1367,6 +1367,15 @@ static Error can_auto_config(const char* value, AuthenticationLevel auth_level, 
     return Error::Ok;
 }
 
+static Error can_driver_info(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN driver info: no can: section configured");
+        return Error::Ok;
+    }
+    config->_can->report_driver_configs();
+    return Error::Ok;
+}
+
 #    if defined(ESP32)
 // Brute-force search for a CAN transceiver: for every candidate pin, pull it
 // low and watch every other candidate pin.  A transceiver's R output follows
@@ -1470,6 +1479,7 @@ void make_user_commands() {
     new ReportCommand("CANStop", "System/CANStop", can_stop, anyState);
     new ReportCommand("CANRead", "System/CANRead", can_read, anyState);
     new ReportCommand("CANAutoConfig", "System/CANAutoConfig", can_auto_config, anyState);
+    new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, anyState);
 #    if defined(ESP32)
     new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
 #    endif

@@ -141,8 +141,11 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
      (0x2D), enable state (0x2F) and in-position flag (0x30); prints a warning
      summary when overload/stall/undervoltage is seen.
    * `$CANAutoConfig` -- probe all driver rates, change the drivers to
-     `can: baud` (broadcast `0x68` + save `0x04`), confirm every configured
+     `can: baud` (addressed `0x68` + save `0x04`), confirm every configured
      motor and close echo again.  Also runs automatically at boot.
+   * `$CANDriverInfo` -- read 0x32 from every answering driver and show the
+     **saved** work mode, echo setting and CAN bit rate (verified after a
+     driver reset too).
    * `$CANPos` -- read actual position (0x2A), position error (0x2B), speed
      (0x29) and in-position flag (0x30) for every answering driver.
    * `$CANStop` -- broadcast the immediate-brake command (0xFC); this stops all
@@ -178,7 +181,8 @@ boot the firmware:
 
 1. probes every PD42S1 rate (125k/250k/500k/1 Mbps) with echo enabled,
 2. if drivers answer at another rate, broadcasts `0x68` (new rate in kbps) at
-   that rate, then broadcasts `0x04` (save) at the configured rate,
+   that rate, then sends an addressed `0x68` + `0x04` (save) to every detected
+   driver and reads 0x32 back to confirm the saved rate,
 3. confirms that every configured `pd42s1` motor answers at the configured
    rate; on a mismatch it warns and leaves echo enabled,
 4. on full success disables echo again (motor sync re-enables it before
@@ -194,7 +198,7 @@ sent a broadcast disable and `$CANStatus` reports
 restart.  (Two physical drivers set to the same address while the config uses
 unique addresses cannot be detected reliably by this protocol.)
 
-## G-code commands (M150..M160)
+## G-code commands (M150..M161)
 
 The CAN subsystem is only initialised when at least one `pd42s1` motor is
 configured; without one, the bus/worker are not started and these commands
@@ -214,6 +218,7 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 | M158 | restart drivers (0x02 broadcast, bench recovery only) |
 | M159 | raw read; `M159 P<address> Q<function>` e.g. `M159 P1 Q44` (0x2C) |
 | M160 | run CAN bit-rate/echo auto-configuration |
+| M161 | display saved driver parameters (0x32: mode/echo/CAN baud) |
 
 M150..M159 use the reserved M100..M199 user-code modal group.  They return
 `ok` immediately after the CAN operation; do not combine them with motion

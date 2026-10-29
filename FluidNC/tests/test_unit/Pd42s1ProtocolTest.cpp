@@ -245,3 +245,11 @@ TEST(Pd42s1Protocol, BuildsSaveParamsCommand) {
     EXPECT_EQ(frame[3], 0xCA);
     EXPECT_EQ(frame[4], 0x5C);
 }
+
+TEST(Pd42s1Protocol, DeterminesLongParameterResponseLengths) {
+    uint8_t system[4] = { 0xC5, 0x01, 0x31, Pd42s1Protocol::STATUS_OK };
+    EXPECT_EQ(Pd42s1Protocol::expected_response_length(system, sizeof(system)), 46u);
+
+    uint8_t driver[4] = { 0xC5, 0x01, 0x32, Pd42s1Protocol::STATUS_OK };
+    EXPECT_EQ(Pd42s1Protocol::expected_response_length(driver, sizeof(driver)), 50u);
+}

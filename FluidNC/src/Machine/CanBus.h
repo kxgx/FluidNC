@@ -149,6 +149,10 @@ namespace Machine {
         // (0x29) and in-position flag (0x30) from every answering driver.
         void report_driver_positions();
 
+        // Reads the saved driver parameters (0x32) and displays work mode,
+        // echo setting and CAN baud for every address that answers.
+        void report_driver_configs();
+
         // Broadcasts the immediate-brake command (0xFC) to all drivers.
         void stop_all_drivers();
 
@@ -202,6 +206,7 @@ namespace Machine {
         void        enable_echoes_at_startup();
         bool        auto_configure_drivers();
         bool        probe_address_quiet(uint8_t address, uint8_t& firmware, uint8_t& hardware, uint32_t timeout_ms, int attempts);
+        bool        read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode);
         void        set_echo_to_address_locked(uint8_t address, bool enable);
         void        disable_all_driver_echo_locked();
         bool        send_echo_state(bool enable);          // caller must hold the Lock

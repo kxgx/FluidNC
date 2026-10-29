@@ -336,15 +336,60 @@ namespace Machine {
         log_info("CAN: auto-config: configured=" << configured_driver_count() << " discovered=" << discovered << " confirmed=" << confirmed
                                                 << " at " << target << " baud");
 
-        if (expected > 0 && confirmed < expected) {
-            log_warn("CAN: " << (expected - confirmed)
-                             << " configured driver(s) did not answer at the configured baud; command echo is left ENABLED");
+        // Persist the setting explicitly per address and read it back (0x32
+        // byte 8..9 contains the saved CAN bit rate).  A broadcast save is not
+        // acknowledged, so this is what proves that the new rate survives a
+        // power cycle.
+        int savedOk = 0;
+        for (uint8_t address = 1; address <= 8; ++address) {
+            uint8_t  currentEcho = 0;
+            uint8_t  currentMode = 0;
+            uint16_t currentBaud = 0;
+            if (!read_driver_config(address, currentBaud, currentEcho, currentMode)) {
+                continue;
+            }
+            uint8_t request2[Pd42s1Protocol::MAX_FRAME_LEN];
+            uint8_t response2[64];
+            size_t  len2 = Pd42s1Protocol::build_set_can_baud_command(address, uint16_t(target / 1000), request2, sizeof(request2));
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                size_t responseLen = 0;
+                if (transact(request2, len2, response2, sizeof(response2), responseLen, 100)) {
+                    break;
+                }
+            }
+            len2 = Pd42s1Protocol::build_save_params_command(address, request2, sizeof(request2));
+            bool saved = false;
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                size_t responseLen = 0;
+                if (transact(request2, len2, response2, sizeof(response2), responseLen, 100) &&
+                    Pd42s1Protocol::parse_ack(response2, responseLen)) {
+                    saved = true;
+                    break;
+                }
+            }
+            if (!saved) {
+                log_warn("CAN: address " << int(address) << " did not acknowledge parameter save");
+                continue;
+            }
+            uint16_t savedBaud = 0;
+            if (read_driver_config(address, savedBaud, currentEcho, currentMode) && savedBaud == uint16_t(target / 1000)) {
+                savedOk++;
+                log_info("CAN: address " << int(address) << " saved CAN baud=" << savedBaud << " kbps");
+            } else {
+                log_warn("CAN: address " << int(address) << " saved CAN baud readback=" << savedBaud << " kbps (expected "
+                                         << uint16_t(target / 1000) << ")");
+            }
+        }
+
+        if (expected > 0 && (confirmed < expected || savedOk < confirmed)) {
+            log_warn("CAN: " << (expected - confirmed) << " configured driver(s) did not answer at the configured baud; command echo is left ENABLED");
             // Do not disable echo when the system is incomplete: motor control
             // needs acknowledgments and a disabled driver would make it
             // impossible to recover without a power cycle.
         } else {
-            // All configured drivers answered: close the echo setting as
-            // requested.  Motor sync will re-enable it before streaming.
+            // All configured drivers answered and saved the new rate: close
+            // the echo setting as requested.  Motor sync re-enables it before
+            // streaming.
             disable_all_driver_echo_locked();
         }
         return true;
@@ -1082,6 +1127,65 @@ namespace Machine {
         }
     }
 
+    bool CanBus::read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode) {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[64];
+        size_t  len = Pd42s1Protocol::build_read_command(address, 0x32, request, sizeof(request));
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            flush_receive();
+            if (!send_message(request, len, 150)) {
+                continue;
+            }
+            // The 0x32 response is 50 bytes across several CAN frames.  Collect
+            // it directly instead of relying on transact()'s length logic.
+            size_t   total    = 0;
+            uint32_t deadline = now_ms() + 300;
+            while (total < sizeof(response)) {
+                int32_t left = int32_t(deadline - now_ms());
+                if (left <= 0) {
+                    break;
+                }
+                size_t received = receive_chunk(response + total, sizeof(response) - total, left > 50 ? 50 : uint32_t(left));
+                if (received == 0) {
+                    break;
+                }
+                total += received;
+            }
+            if (total == 50 && response[0] == 0xC5 && response[49] == 0x5C &&
+                Pd42s1Protocol::checksum(response, 48) == response[48] && response[2] == 0x32 &&
+                response[3] == Pd42s1Protocol::STATUS_OK) {
+                mode          = response[4];
+                echo          = response[5];
+                can_baud_kbps = uint16_t((uint16_t(response[10]) << 8) | response[11]);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    void CanBus::report_driver_configs() {
+        if (!driver_ok("config")) return;
+        if (!_ready) {
+            log_info("CAN config: bus not ready");
+            return;
+        }
+        Lock lock(*this);
+        int  found = 0;
+        for (uint8_t address = 1; address <= 8; ++address) {
+            uint16_t baud = 0;
+            uint8_t  echo = 0;
+            uint8_t  mode = 0;
+            if (read_driver_config(address, baud, echo, mode)) {
+                found++;
+                log_info("  address " << int(address) << ": mode=" << int(mode) << " echo=" << int(echo) << " saved-CAN-baud=" << baud
+                                      << " kbps");
+            }
+        }
+        if (!found) {
+            log_info("CAN config: (no devices)");
+        }
+    }
+
     void CanBus::report_driver_positions() {
         if (!driver_ok("positions")) return;
         if (!_ready) {
@@ -1186,27 +1290,45 @@ namespace Machine {
         Lock lock(*this);
 
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[128];
         size_t  len = Pd42s1Protocol::build_read_command(address, function, request, sizeof(request));
 
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            size_t responseLen = 0;
-            if (transact(request, len, response, sizeof(response), responseLen, 100)) {
-                char text[3 * Pd42s1Protocol::MAX_FRAME_LEN + 1];
-                char* out = text;
-                for (size_t i = 0; i < responseLen; ++i) {
-                    out += snprintf(out, size_t(text + sizeof(text) - out), "%02X ", response[i]);
-                }
-                char funcText[8];
-                snprintf(funcText, sizeof(funcText), "0x%02X", int(function));
-                log_info("CAN read: address " << int(address) << " function " << funcText << " response(" << int(responseLen) << "): "
-                                              << text);
-                return;
-            }
-        }
         char funcText[8];
         snprintf(funcText, sizeof(funcText), "0x%02X", int(function));
-        log_warn("CAN read: address " << int(address) << " function " << funcText << ": no response");
+
+        flush_receive();
+        if (!send_message(request, len, 150)) {
+            log_warn("CAN read: address " << int(address) << " function " << funcText << ": transmit failed");
+            return;
+        }
+
+        // Deliberately not using transact(): this diagnostic should show the
+        // raw bytes even when the response length is not modelled yet.
+        size_t   total    = 0;
+        uint32_t deadline = now_ms() + 300;
+        while (total < sizeof(response)) {
+            int32_t left = int32_t(deadline - now_ms());
+            if (left <= 0) {
+                break;
+            }
+            size_t received = receive_chunk(response + total, sizeof(response) - total, left > 50 ? 50 : uint32_t(left));
+            if (received == 0) {
+                break;
+            }
+            total += received;
+        }
+        flush_receive();
+
+        if (!total) {
+            log_warn("CAN read: address " << int(address) << " function " << funcText << ": no response");
+            return;
+        }
+        char  text[3 * 128 + 1];
+        char* out = text;
+        for (size_t i = 0; i < total; ++i) {
+            out += snprintf(out, size_t(text + sizeof(text) - out), "%02X ", response[i]);
+        }
+        log_info("CAN read: address " << int(address) << " function " << funcText << " response(" << int(total) << "): " << text);
     }
 
     void CanBus::restart_drivers() {

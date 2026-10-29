@@ -70,6 +70,9 @@ static void execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
         case 160:
             can->run_auto_config();
             break;
+        case 161:
+            can->report_driver_configs();
+            break;
         default:
             log_info("CAN: unknown M" << int(code));
             break;
@@ -981,7 +984,7 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                     // 153 driver faults, 154 driver positions,
                     // 155 release stall, 156 echo on, 157 immediate stop,
                     // 158 restart drivers, 159 raw read (P=addr, Q=func),
-                    // 160 auto-configure driver baud/echo.
+                    // 160 auto-configure driver baud/echo, 161 saved driver config.
                     case 150:
                     case 151:
                     case 152:
@@ -993,6 +996,7 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                     case 158:
                     case 159:
                     case 160:
+                    case 161:
                         gc_block.can_mcode = uint8_t(int_value);
                         mg_word_bit        = ModalGroup::MM10;
                         break;
