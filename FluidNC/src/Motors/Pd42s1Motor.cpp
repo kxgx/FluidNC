@@ -26,6 +26,14 @@ namespace MotorDrivers {
         constexpr uint32_t WARN_INTERVAL_MS       = 5000;
         constexpr uint32_t POSITION_UNITS_PER_REV = 51200;
 
+        // Fast final-position verification.  After the final target has been
+        // acknowledged, read the actual driver position and resend the target
+        // until it is within this many driver units (51200 units/rev).
+        constexpr uint32_t VERIFY_DELAY_MS      = 8;
+        constexpr uint32_t VERIFY_RETRY_MS      = 8;
+        constexpr uint8_t  VERIFY_MAX_ATTEMPTS  = 8;
+        constexpr int32_t  VERIFY_TOLERANCE     = 2;
+
         uint32_t now_ms() {
             return uint32_t(esp_timer_get_time() / 1000);
         }
@@ -420,15 +428,54 @@ namespace MotorDrivers {
         return true;
     }
 
-    void Pd42s1Motor::poll_position() {
+    bool Pd42s1Motor::read_position(int32_t& position) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  responseLen = 0;
 
-        size_t  len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+        size_t len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+        return transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
+               Pd42s1Protocol::parse_position(response, responseLen, position);
+    }
+
+    void Pd42s1Motor::verify_final_position(uint32_t nowMs) {
+        if (!_verifyPending || _disabled || !_synced) {
+            return;
+        }
+
+        int32_t actual = 0;
+        if (read_position(actual)) {
+            _driverPosition = actual;
+            _online         = true;
+            // Compare modulo 2^32: the driver's position counter wraps.
+            int32_t error = int32_t(uint32_t(actual) - _lastTarget);
+            if (error >= -VERIFY_TOLERANCE && error <= VERIFY_TOLERANCE) {
+                _verifyPending = false;
+                _finalTargetAcked = true;
+                return;
+            }
+        }
+
+        ++_verifyAttempts;
+        if (_verifyAttempts > VERIFY_MAX_ATTEMPTS) {
+            _verifyPending     = false;
+            _finalTargetAcked  = false;
+            _synced            = false;
+            warn_throttled(nowMs, "final position verification failed; resynchronising");
+            return;
+        }
+
+        // The target command is idempotent; re-send it and read back again.
+        if (send_target(_lastTarget, TRANSACTION_TIMEOUT_MS)) {
+            _finalTargetAcked = true;
+        }
+        _verifyPending = true;
+        _nextVerifyMs  = nowMs + VERIFY_RETRY_MS;
+    }
+
+    void Pd42s1Motor::poll_position() {
         int32_t position = 0;
-        if (transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
-            Pd42s1Protocol::parse_position(response, responseLen, position)) {
+        if (read_position(position)) {
             _driverPosition = position;
             _online         = true;
             _readFailures   = 0;
@@ -521,6 +568,8 @@ namespace MotorDrivers {
                     if (target != _lastTarget) {
                         _lastTargetChangeMs = nowMs;
                         _finalTargetAcked   = false;
+                        _verifyPending      = false;
+                        _verifyAttempts     = 0;
                     }
                     send_target_nowait(target);
                 } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
@@ -529,9 +578,16 @@ namespace MotorDrivers {
                     // cannot leave the axis a few millimetres short.
                     if (send_target(target, TRANSACTION_TIMEOUT_MS)) {
                         _finalTargetAcked = true;
+                        _verifyPending    = true;
+                        _verifyAttempts   = 0;
+                        _nextVerifyMs     = nowMs + VERIFY_DELAY_MS;
                     }
                 }
             }
+        }
+
+        if (_verifyPending && int32_t(nowMs - _nextVerifyMs) >= 0) {
+            verify_final_position(nowMs);
         }
 
         if (_statusPollMs && int32_t(nowMs - _nextStatusMs) >= 0) {
