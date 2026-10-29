@@ -1376,6 +1376,26 @@ static Error can_driver_info(const char* value, AuthenticationLevel auth_level, 
     return Error::Ok;
 }
 
+static Error can_log(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    bool enabled;
+    if (value && *value) {
+        if (string_util::equal_ignore_case(value, "on")) {
+            enabled = true;
+        } else if (string_util::equal_ignore_case(value, "off")) {
+            enabled = false;
+        } else {
+            log_info("CAN log: usage $CANLog or $CANLog=on/off (currently "
+                     << (CanBus::logging_enabled() ? "on" : "off") << ")");
+            return Error::Ok;
+        }
+    } else {
+        enabled = CanBus::toggle_logging();
+    }
+    CanBus::set_logging_enabled(enabled);
+    log_info("CAN logging " << (enabled ? "enabled" : "disabled"));
+    return Error::Ok;
+}
+
 #    if defined(ESP32)
 // Brute-force search for a CAN transceiver: for every candidate pin, pull it
 // low and watch every other candidate pin.  A transceiver's R output follows
@@ -1480,6 +1500,7 @@ void make_user_commands() {
     new ReportCommand("CANRead", "System/CANRead", can_read, anyState);
     new ReportCommand("CANAutoConfig", "System/CANAutoConfig", can_auto_config, anyState);
     new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, anyState);
+    new ReportCommand("CANLog", "System/CANLog", can_log, anyState);
 #    if defined(ESP32)
     new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
 #    endif

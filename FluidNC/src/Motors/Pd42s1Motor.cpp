@@ -110,12 +110,12 @@ namespace MotorDrivers {
     }
 
     void Pd42s1Motor::config_message() {
-        log_info("    " << name() << " CAN address:" << _address << " counts_per_step:" << _countsPerStep << " speed:" << _speedRpm
+        can_log_info("    " << name() << " CAN address:" << _address << " counts_per_step:" << _countsPerStep << " speed:" << _speedRpm
                         << "rpm accel:" << _accel << " update:" << _updateMs << "ms");
     }
 
     void Pd42s1Motor::debug_message() {
-        log_info("    " << name() << " address:" << _address << " synced:" << (_synced ? "yes" : "no")
+        can_log_info("    " << name() << " address:" << _address << " synced:" << (_synced ? "yes" : "no")
                         << " online:" << (_online ? "yes" : "no") << " disabled:" << (_disabled ? "yes" : "no") << " steps:" << _stepCount
                         << " driver position:" << _driverPosition);
     }
@@ -277,7 +277,7 @@ namespace MotorDrivers {
         _targetDirty   = true;
         _disabled      = false;
         _online        = true;
-        log_info("CAN: " << name() << " stall protection released (0xF9), motor re-enabled");
+        can_log_info("CAN: " << name() << " stall protection released (0xF9), motor re-enabled");
         return true;
     }
 
@@ -340,7 +340,7 @@ namespace MotorDrivers {
         _readFailures     = 0;
         _writeFailures    = 0;
 
-        log_info("CAN: " << name() << " address:" << _address << " online, firmware V" << int(firmwareVersion / 10) << "."
+        can_log_info("CAN: " << name() << " address:" << _address << " online, firmware V" << int(firmwareVersion / 10) << "."
                          << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "." << int(hardwareVersion % 10)
                          << " position:" << position);
         return true;
@@ -369,7 +369,7 @@ namespace MotorDrivers {
                 // holding a stale target from before it was disabled.
                 _targetDirty = true;
             }
-            log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
+            can_log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
         } else {
             _online = false;
             _writeFailures++;
@@ -416,7 +416,7 @@ namespace MotorDrivers {
         _targetDirty  = false;
         _online       = true;
         _writeFailures = 0;
-        log_verbose("CAN: " << name() << " target:" << int32_t(target) << " steps:" << _stepCount);
+        can_log_verbose("CAN: " << name() << " target:" << int32_t(target) << " steps:" << _stepCount);
         return true;
     }
 
@@ -432,7 +432,7 @@ namespace MotorDrivers {
             _driverPosition = position;
             _online         = true;
             _readFailures   = 0;
-            log_verbose("CAN: " << name() << " driver position:" << position << " target:" << int32_t(_lastTarget));
+            can_log_verbose("CAN: " << name() << " driver position:" << position << " target:" << int32_t(_lastTarget));
         } else {
             _online = false;
             _readFailures++;
@@ -449,7 +449,7 @@ namespace MotorDrivers {
             return;
         }
         _lastWarnMs = nowMs;
-        log_warn("CAN: " << name() << " address:" << _address << ": " << message);
+        can_log_warn("CAN: " << name() << " address:" << _address << ": " << message);
     }
 
     bool Pd42s1Motor::send_target_nowait(uint32_t target) {

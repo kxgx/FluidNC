@@ -74,6 +74,13 @@ namespace Machine {
         static void unmark_driver_configured();
         static bool driver_configured();
         static int  configured_driver_count();
+
+        // CAN background logging is off by default.  Explicit $CAN... report
+        // commands still print their results; this gate only controls the
+        // asynchronous/boot/worker messages.
+        static bool logging_enabled();
+        static void set_logging_enabled(bool enabled);
+        static bool toggle_logging();
         bool        enabled() const { return _driver_configured; }
 
         uint32_t command_id() const { return _command_id; }
@@ -228,6 +235,7 @@ namespace Machine {
 
         static bool _driver_configured;
         static int  _driver_count;
+        static bool _logging_enabled;
 
         bool              _ready          = false;
         SemaphoreHandle_t _bus_mutex      = nullptr;
@@ -258,5 +266,13 @@ namespace Machine {
         bool     _message_sent        = false;
     };
 }
+
+// Gate the asynchronous/boot/worker CAN messages behind $CANLog.  Explicit
+// $CANStatus/$CANScan/... report commands use log_* directly so they still
+// print when background logging is off.
+#define can_log_info(...)  do { if (Machine::CanBus::logging_enabled()) { log_info(__VA_ARGS__); } } while (0)
+#define can_log_warn(...)  do { if (Machine::CanBus::logging_enabled()) { log_warn(__VA_ARGS__); } } while (0)
+#define can_log_error(...) do { if (Machine::CanBus::logging_enabled()) { log_error(__VA_ARGS__); } } while (0)
+#define can_log_verbose(...) do { if (Machine::CanBus::logging_enabled()) { log_verbose(__VA_ARGS__); } } while (0)
 
 #endif  // MAX_N_CAN

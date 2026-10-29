@@ -21,6 +21,21 @@ namespace Machine {
 
     bool CanBus::_driver_configured = false;
     int  CanBus::_driver_count      = 0;
+    bool CanBus::_logging_enabled   = false;
+
+    bool CanBus::logging_enabled() {
+        return _logging_enabled;
+    }
+
+    void CanBus::set_logging_enabled(bool enabled) {
+        _logging_enabled = enabled;
+    }
+
+    bool CanBus::toggle_logging() {
+        _logging_enabled = !_logging_enabled;
+        return _logging_enabled;
+    }
+
     using MotorDrivers::Pd42s1Protocol;
 
     namespace {
@@ -143,21 +158,21 @@ namespace Machine {
 
     void CanBus::init() {
         if (!_driver_configured) {
-            log_verbose("CAN: no PD42S1 motor configured; CAN disabled");
+            can_log_verbose("CAN: no PD42S1 motor configured; CAN disabled");
             return;
         }
         if (_ready) {
             return;
         }
         if (!configured()) {
-            log_verbose("CAN: bus not configured");
+            can_log_verbose("CAN: bus not configured");
             return;
         }
 
         _bus_mutex  = xSemaphoreCreateMutex();
         _list_mutex = xSemaphoreCreateMutex();
         if (!_bus_mutex || !_list_mutex) {
-            log_error("CAN: cannot create mutexes");
+            can_log_error("CAN: cannot create mutexes");
             return;
         }
 
@@ -166,13 +181,13 @@ namespace Machine {
         }
         _ready = true;
         start_worker();
-        log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
+        can_log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
     }
 
     bool CanBus::install_driver() {
         twai_timing_config_t timing;
         if (!timing_for_baud(_baud, timing)) {
-            log_error("CAN: unsupported baud " << _baud);
+            can_log_error("CAN: unsupported baud " << _baud);
             return false;
         }
 
@@ -189,12 +204,12 @@ namespace Machine {
 
         esp_err_t err = twai_driver_install(&general, &timing, &filter);
         if (err != ESP_OK) {
-            log_error("CAN: driver install failed: " << esp_err_to_name(err));
+            can_log_error("CAN: driver install failed: " << esp_err_to_name(err));
             return false;
         }
         err = twai_start();
         if (err != ESP_OK) {
-            log_error("CAN: start failed: " << esp_err_to_name(err));
+            can_log_error("CAN: start failed: " << esp_err_to_name(err));
             twai_driver_uninstall();
             return false;
         }
@@ -238,14 +253,14 @@ namespace Machine {
         }
         flush_receive();
         _echo_state = false;
-        log_info("CAN: command echo disabled on the drivers after auto-config");
+        can_log_info("CAN: command echo disabled on the drivers after auto-config");
     }
 
     bool CanBus::auto_configure_drivers() {
         static const uint32_t bauds[] = { 125000, 250000, 500000, 1000000 };
         const uint32_t        target  = _baud;
 
-        log_info("CAN: auto-config: target " << target << " baud; probing all driver rates");
+        can_log_info("CAN: auto-config: target " << target << " baud; probing all driver rates");
         int expected  = configured_driver_count();
         int discovered = 0;
         if (expected <= 0) {
@@ -280,7 +295,7 @@ namespace Machine {
                 uint8_t hardware = 0;
                 if (probe_address_quiet(address, firmware, hardware, 80, 3)) {
                     found++;
-                    log_info("CAN: found address " << int(address) << " at " << rate << " baud (fw V" << int(firmware / 10) << "."
+                    can_log_info("CAN: found address " << int(address) << " at " << rate << " baud (fw V" << int(firmware / 10) << "."
                                                    << int(firmware % 10) << " hw V" << int(hardware / 10) << "." << int(hardware % 10)
                                                    << ")");
                 }
@@ -291,7 +306,7 @@ namespace Machine {
                 uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
                 size_t  len = Pd42s1Protocol::build_set_can_baud_command(0, uint16_t(target / 1000), request, sizeof(request));
                 if (len) {
-                    log_info("CAN: broadcasting CAN baud " << target << " to " << found << " driver(s) currently at " << rate);
+                    can_log_info("CAN: broadcasting CAN baud " << target << " to " << found << " driver(s) currently at " << rate);
                     send_message(request, len, 100);
                     vTaskDelay(pdMS_TO_TICKS(50));
                 }
@@ -313,7 +328,7 @@ namespace Machine {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  len = Pd42s1Protocol::build_save_params_command(0, request, sizeof(request));
         if (len) {
-            log_info("CAN: broadcasting parameter save (0x04) at " << target << " baud");
+            can_log_info("CAN: broadcasting parameter save (0x04) at " << target << " baud");
             send_message(request, len, 100);
             vTaskDelay(pdMS_TO_TICKS(30));
         }
@@ -333,7 +348,7 @@ namespace Machine {
                 confirmed++;
             }
         }
-        log_info("CAN: auto-config: configured=" << configured_driver_count() << " discovered=" << discovered << " confirmed=" << confirmed
+        can_log_info("CAN: auto-config: configured=" << configured_driver_count() << " discovered=" << discovered << " confirmed=" << confirmed
                                                 << " at " << target << " baud");
 
         // Persist the setting explicitly per address and read it back (0x32
@@ -352,7 +367,7 @@ namespace Machine {
                 // Already correct: do not rewrite the driver's NVRAM on every
                 // boot.  Echo/baud were confirmed above.
                 savedOk++;
-                log_info("CAN: address " << int(address) << " already saved CAN baud=" << currentBaud << " kbps; skip write");
+                can_log_info("CAN: address " << int(address) << " already saved CAN baud=" << currentBaud << " kbps; skip write");
                 continue;
             }
             uint8_t request2[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -375,21 +390,21 @@ namespace Machine {
                 }
             }
             if (!saved) {
-                log_warn("CAN: address " << int(address) << " did not acknowledge parameter save");
+                can_log_warn("CAN: address " << int(address) << " did not acknowledge parameter save");
                 continue;
             }
             uint16_t savedBaud = 0;
             if (read_driver_config(address, savedBaud, currentEcho, currentMode) && savedBaud == uint16_t(target / 1000)) {
                 savedOk++;
-                log_info("CAN: address " << int(address) << " saved CAN baud=" << savedBaud << " kbps");
+                can_log_info("CAN: address " << int(address) << " saved CAN baud=" << savedBaud << " kbps");
             } else {
-                log_warn("CAN: address " << int(address) << " saved CAN baud readback=" << savedBaud << " kbps (expected "
+                can_log_warn("CAN: address " << int(address) << " saved CAN baud readback=" << savedBaud << " kbps (expected "
                                          << uint16_t(target / 1000) << ")");
             }
         }
 
         if (expected > 0 && (confirmed < expected || savedOk < confirmed)) {
-            log_warn("CAN: " << (expected - confirmed) << " configured driver(s) did not answer at the configured baud; command echo is left ENABLED");
+            can_log_warn("CAN: " << (expected - confirmed) << " configured driver(s) did not answer at the configured baud; command echo is left ENABLED");
             // Do not disable echo when the system is incomplete: motor control
             // needs acknowledgments and a disabled driver would make it
             // impossible to recover without a power cycle.
@@ -407,19 +422,19 @@ namespace Machine {
             return false;
         }
         const uint32_t target = _baud;
-        log_info("CAN: starting manual auto-config (target " << target << " baud)");
+        can_log_info("CAN: starting manual auto-config (target " << target << " baud)");
         suspend();
         bool ok = auto_configure_drivers();
         if (!ok) {
             _baud = target;
             if (!install_driver()) {
-                log_error("CAN: auto-config failed and the bus could not be restored");
+                can_log_error("CAN: auto-config failed and the bus could not be restored");
                 return false;
             }
             _ready = true;
         }
         start_worker();
-        log_info("CAN: auto-config finished");
+        can_log_info("CAN: auto-config finished");
         return ok;
     }
 
@@ -429,7 +444,7 @@ namespace Machine {
         _ready          = true;
 
         if (xTaskCreate(worker_entry, "can", 4096, this, 2, &_task_handle) != pdPASS) {
-            log_error("CAN: cannot create worker task");
+            can_log_error("CAN: cannot create worker task");
             _task_handle = nullptr;
             _ready       = false;
         }
@@ -451,7 +466,7 @@ namespace Machine {
             return true;
         }
         if (!install_driver()) {
-            log_error("CAN: cannot restore the bus");
+            can_log_error("CAN: cannot restore the bus");
             return false;
         }
         start_worker();
@@ -523,13 +538,13 @@ namespace Machine {
             if (_n_clients < MAX_CLIENTS) {
                 _clients[_n_clients++] = client;
             } else {
-                log_error("CAN: too many clients");
+                can_log_error("CAN: too many clients");
             }
         }
         xSemaphoreGive(_list_mutex);
 
         if (duplicate) {
-            log_error("CAN: duplicate PD42S1 address " << int(duplicate) << " configured; stopping all CAN control");
+            can_log_error("CAN: duplicate PD42S1 address " << int(duplicate) << " configured; stopping all CAN control");
             inhibit_control("duplicate PD42S1 address");
         }
     }
@@ -537,7 +552,7 @@ namespace Machine {
     void CanBus::inhibit_control(const char* reason) {
         _inhibited      = true;
         _inhibit_reason = reason;
-        log_error("CAN: control inhibited: " << reason);
+        can_log_error("CAN: control inhibited: " << reason);
         if (!_ready) {
             return;
         }
@@ -576,7 +591,7 @@ namespace Machine {
 
     bool CanBus::driver_ok(const char* operation) {
         if (!_driver_configured) {
-            log_info("CAN " << operation << ": no PD42S1 motor configured; CAN disabled");
+            can_log_info("CAN " << operation << ": no PD42S1 motor configured; CAN disabled");
             return false;
         }
         return true;
@@ -737,7 +752,7 @@ namespace Machine {
         size_t  len  = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
         bool    ok   = false;
         if (len) {
-            log_info("CAN: " << (enable ? "enabling" : "disabling") << " command echo (broadcast 0x6F=" << int(echo) << ")");
+            can_log_info("CAN: " << (enable ? "enabling" : "disabling") << " command echo (broadcast 0x6F=" << int(echo) << ")");
             ok = send_message(request, len, 50);
             if (ok) {
                 _echo_state = enable;
@@ -764,7 +779,7 @@ namespace Machine {
         if (!len) {
             return false;
         }
-        log_verbose("CAN: enabling command echo at address " << int(address));
+        can_log_verbose("CAN: enabling command echo at address " << int(address));
         bool ok = send_message(request, len, 50);
         vTaskDelay(pdMS_TO_TICKS(2));  // let the driver apply the setting
         flush_receive();               // discard its ack if echo was already on
@@ -833,7 +848,7 @@ namespace Machine {
             enable_driver_echo_locked(address);
         }
         flush_receive();
-        log_info("CAN: enabled command echo on the drivers at startup");
+        can_log_info("CAN: enabled command echo on the drivers at startup");
     }
 
     void CanBus::set_driver_echo(bool enable) {
@@ -900,7 +915,7 @@ namespace Machine {
             uint32_t tecBefore = twai_tx_error_counter();
             found              = scan_addresses();
             uint32_t tecAfter  = twai_tx_error_counter();
-            log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
+            can_log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
                                       << (tecAfter == 0 ? " (frames were ACKed by a node)"
                                                         : " (no ACK - check driver power, wiring and bit rate)"));
         }
@@ -914,7 +929,7 @@ namespace Machine {
             found += scan_address(address, 100);
         }
         if (!found) {
-            log_info("  (no devices)");
+            can_log_info("  (no devices)");
         }
         return found;
     }
@@ -962,7 +977,7 @@ namespace Machine {
                 vTaskDelay(pdMS_TO_TICKS(5));
                 total += scan_addresses();
                 uint32_t tecAfter = twai_tx_error_counter();
-                log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
+                can_log_info("  TWAI tx_err " << tecBefore << " -> " << tecAfter
                                           << (tecAfter == 0 ? " (frames were ACKed by a node)"
                                                             : " (no ACK - check driver power, wiring and bit rate)"));
                 twai_stop();
@@ -973,7 +988,7 @@ namespace Machine {
 
         _baud = configured;
         if (!install_driver()) {
-            log_error("CAN: cannot restore the bus after the baud scan");
+            can_log_error("CAN: cannot restore the bus after the baud scan");
             return total;
         }
         start_worker();
@@ -996,15 +1011,15 @@ namespace Machine {
             _bus_off_count++;
             if (_last_state_log_ms == 0 || now - _last_state_log_ms >= 2000) {
                 _last_state_log_ms = now;
-                log_error("CAN: bus off (count:" << _bus_off_count << "), starting recovery");
+                can_log_error("CAN: bus off (count:" << _bus_off_count << "), starting recovery");
             }
             twai_initiate_recovery();
         } else if (status.state == TWAI_STATE_STOPPED) {
-            log_verbose("CAN: restarting bus after recovery");
+            can_log_verbose("CAN: restarting bus after recovery");
             twai_start();
         } else if (status.tx_error_counter > 127 && (_last_state_log_ms == 0 || now - _last_state_log_ms >= 2000)) {
             _last_state_log_ms = now;
-            log_warn("CAN: error-passive, tx_err=" << status.tx_error_counter << " rx_err=" << status.rx_error_counter);
+            can_log_warn("CAN: error-passive, tx_err=" << status.tx_error_counter << " rx_err=" << status.rx_error_counter);
         }
     }
 
@@ -1029,7 +1044,7 @@ namespace Machine {
         log_info("CAN config: tx=" << _tx.name() << " rx=" << _rx.name() << " baud=" << _baud
                                    << " command_id=" << uint32_t(_command_id) << " echoes=" << (_echo_state ? "on" : "off"));
         if (_inhibited) {
-            log_error("CAN control inhibited: " << (_inhibit_reason ? _inhibit_reason : "unknown reason"));
+            can_log_error("CAN control inhibited: " << (_inhibit_reason ? _inhibit_reason : "unknown reason"));
         }
     }
 
@@ -1048,7 +1063,7 @@ namespace Machine {
         // the enable/brake state; in testing on firmware V1.6 a broadcast
         // 0xFB made all four drivers stop answering until they were power
         // cycled, so this command deliberately avoids 0xFB and broadcast.
-        log_info("CAN: releasing stall protection (0xF9) on addresses 1..8");
+        can_log_info("CAN: releasing stall protection (0xF9) on addresses 1..8");
         int acked = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
             size_t len = Pd42s1Protocol::build_clear_stall_command(address, request, sizeof(request));
@@ -1061,7 +1076,7 @@ namespace Machine {
                 }
             }
         }
-        log_info("CAN: 0xF9 stall-release acknowledged by " << acked << " address(es)");
+        can_log_info("CAN: 0xF9 stall-release acknowledged by " << acked << " address(es)");
     }
 
     void CanBus::report_driver_faults() {
@@ -1115,7 +1130,7 @@ namespace Machine {
             read_byte(address, Pd42s1Protocol::FUNC_READ_ENABLE, enable);
             read_byte(address, Pd42s1Protocol::FUNC_READ_IN_POSITION, inpos);
 
-            log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " hw V"
+            can_log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " hw V"
                                   << int(hardware / 10) << "." << int(hardware % 10) << " status=" << motor_status_name(status)
                                   << " stall=" << (stall == 0xFF ? "?" : (stall ? "YES" : "no"))
                                   << " enabled=" << (enable == 0xFF ? "?" : (enable ? "no" : "yes"))
@@ -1184,7 +1199,7 @@ namespace Machine {
             uint8_t  mode = 0;
             if (read_driver_config(address, baud, echo, mode)) {
                 found++;
-                log_info("  address " << int(address) << ": mode=" << int(mode) << " echo=" << int(echo) << " saved-CAN-baud=" << baud
+                can_log_info("  address " << int(address) << ": mode=" << int(mode) << " echo=" << int(echo) << " saved-CAN-baud=" << baud
                                       << " kbps");
             }
         }
@@ -1261,7 +1276,7 @@ namespace Machine {
             snprintf(errText, sizeof(errText), hasError ? "%ld" : "?", long(error));
             snprintf(speedText, sizeof(speedText), hasSpeed ? "%d" : "?", int(speed));
 
-            log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " pos=" << posText
+            can_log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " pos=" << posText
                                   << " error=" << errText << " speed=" << speedText << "RPM in-position="
                                   << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
         }
@@ -1273,7 +1288,7 @@ namespace Machine {
     void CanBus::stop_all_drivers() {
         if (!driver_ok("stop")) return;
         if (!_ready) {
-            log_info("CAN stop: bus not ready");
+            can_log_info("CAN stop: bus not ready");
             return;
         }
         Lock lock(*this);
@@ -1288,7 +1303,7 @@ namespace Machine {
         if (!len) {
             return;
         }
-        log_warn("CAN: safe stop: broadcasting motor disable (0xFA=1); 0xFC brake is disabled for safety");
+        can_log_warn("CAN: safe stop: broadcasting motor disable (0xFA=1); 0xFC brake is disabled for safety");
         send_message(request, len, 100);
         flush_receive();
     }
@@ -1356,7 +1371,7 @@ namespace Machine {
         if (!len) {
             return;
         }
-        log_info("CAN: broadcasting driver reset (0x02)");
+        can_log_info("CAN: broadcasting driver reset (0x02)");
         send_message(request, len, 100);
         flush_receive();
 
@@ -1371,7 +1386,7 @@ namespace Machine {
             enable_driver_echo_locked(address);
         }
         flush_receive();
-        log_info("CAN: driver reset done, command echo re-enabled; run $CANScan");
+        can_log_info("CAN: driver reset done, command echo re-enabled; run $CANScan");
     }
 
     void CanBus::worker() {
@@ -1429,7 +1444,7 @@ namespace Machine {
             vTaskDelay(pdMS_TO_TICKS(5));
         }
         if (!_task_exited) {
-            log_error("CAN: worker task did not stop");
+            can_log_error("CAN: worker task did not stop");
             _task_handle = nullptr;
             _bus_mutex   = nullptr;
             _list_mutex  = nullptr;
