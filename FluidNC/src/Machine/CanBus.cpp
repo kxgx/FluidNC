@@ -1063,7 +1063,7 @@ namespace Machine {
         // the enable/brake state; in testing on firmware V1.6 a broadcast
         // 0xFB made all four drivers stop answering until they were power
         // cycled, so this command deliberately avoids 0xFB and broadcast.
-        can_log_info("CAN: releasing stall protection (0xF9) on addresses 1..8");
+        log_info("CAN: releasing stall protection (0xF9) on addresses 1..8");
         int acked = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
             size_t len = Pd42s1Protocol::build_clear_stall_command(address, request, sizeof(request));
@@ -1076,7 +1076,7 @@ namespace Machine {
                 }
             }
         }
-        can_log_info("CAN: 0xF9 stall-release acknowledged by " << acked << " address(es)");
+        log_info("CAN: 0xF9 stall-release acknowledged by " << acked << " address(es)");
     }
 
     void CanBus::report_driver_faults() {
@@ -1130,7 +1130,7 @@ namespace Machine {
             read_byte(address, Pd42s1Protocol::FUNC_READ_ENABLE, enable);
             read_byte(address, Pd42s1Protocol::FUNC_READ_IN_POSITION, inpos);
 
-            can_log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " hw V"
+            log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " hw V"
                                   << int(hardware / 10) << "." << int(hardware % 10) << " status=" << motor_status_name(status)
                                   << " stall=" << (stall == 0xFF ? "?" : (stall ? "YES" : "no"))
                                   << " enabled=" << (enable == 0xFF ? "?" : (enable ? "no" : "yes"))
@@ -1199,7 +1199,7 @@ namespace Machine {
             uint8_t  mode = 0;
             if (read_driver_config(address, baud, echo, mode)) {
                 found++;
-                can_log_info("  address " << int(address) << ": mode=" << int(mode) << " echo=" << int(echo) << " saved-CAN-baud=" << baud
+                log_info("  address " << int(address) << ": mode=" << int(mode) << " echo=" << int(echo) << " saved-CAN-baud=" << baud
                                       << " kbps");
             }
         }
@@ -1276,7 +1276,7 @@ namespace Machine {
             snprintf(errText, sizeof(errText), hasError ? "%ld" : "?", long(error));
             snprintf(speedText, sizeof(speedText), hasSpeed ? "%d" : "?", int(speed));
 
-            can_log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " pos=" << posText
+            log_info("  address " << int(address) << ": fw V" << int(firmware / 10) << "." << int(firmware % 10) << " pos=" << posText
                                   << " error=" << errText << " speed=" << speedText << "RPM in-position="
                                   << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
         }
@@ -1288,7 +1288,7 @@ namespace Machine {
     void CanBus::stop_all_drivers() {
         if (!driver_ok("stop")) return;
         if (!_ready) {
-            can_log_info("CAN stop: bus not ready");
+            log_info("CAN stop: bus not ready");
             return;
         }
         Lock lock(*this);
