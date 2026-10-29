@@ -116,7 +116,12 @@ namespace MotorDrivers {
     }
 
     uint32_t Pd42s1Motor::target_position() const {
-        double scaled = double(_stepCount) * double(_countsPerStep);
+        // Do not assume _baseStepCount is zero: a resync during motion updates
+        // the driver base position but the hardware step counter keeps
+        // counting.  Subtracting the counter value captured at the last sync
+        // keeps the target continuous across resyncs.
+        int64_t steps  = int64_t(_stepCount) - int64_t(_baseStepCount);
+        double  scaled = double(steps) * double(_countsPerStep);
         if (_invertDirection) {
             scaled = -scaled;
         }
@@ -287,7 +292,13 @@ namespace MotorDrivers {
             return false;
         }
 
-        _basePosition     = uint32_t(position);
+        // On a resync after a lost command/error, keep the current desired
+        // target instead of adopting the driver's (possibly lagging) position,
+        // otherwise the axis would silently stop short of the commanded move.
+        const uint32_t continuityTarget = _everSynced ? target_position() : 0;
+
+        _basePosition     = _everSynced ? continuityTarget : uint32_t(position);
+        _baseStepCount    = _stepCount;
         _lastTarget       = _basePosition;
         _driverPosition   = position;
         _targetDirty      = true;
@@ -295,6 +306,7 @@ namespace MotorDrivers {
         _disablePending   = false;
         _disableRequested = false;
         _synced           = true;
+        _everSynced       = true;
         _online           = true;
         _readFailures     = 0;
         _writeFailures    = 0;

@@ -149,6 +149,7 @@ namespace MotorDrivers {
 
         // CAN task state
         bool     _synced         = false;
+        bool     _everSynced     = false;  // first sync adopts the driver position
         bool     _online         = false;
         bool     _disabled       = false;
         uint32_t _nextSyncMs     = 0;
@@ -157,6 +158,7 @@ namespace MotorDrivers {
         uint32_t _nextDisableMs  = 0;
         uint32_t _lastWarnMs     = 0;
         uint32_t _basePosition   = 0;
+        int32_t  _baseStepCount  = 0;  // step counter value at the last sync
         uint32_t _lastTarget     = 0;
         bool     _targetDirty    = true;
         int32_t  _driverPosition = 0;

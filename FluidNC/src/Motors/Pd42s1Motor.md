@@ -94,6 +94,23 @@ firmware sends a new absolute position every `update_ms` (default 20 ms).
   updates; keep the total CAN load in mind when using many axes or a low
   `update_ms`.
 
+## Position scaling and resync
+
+Driver position units per axis millimetre:
+
+    counts_per_mm = steps_per_mm * counts_per_step
+
+With the reference config (640 steps/mm, `counts_per_step: 16`) that is
+**10240 counts/mm**.  Bench measurement (500 kbps, unloaded): 1 mm gave
+~10240 counts, 10 mm gave ~102400 counts and 50 mm gave ~512000 counts.
+
+If a target command is lost (CAN checksum error), the firmware keeps the
+*desired* target across the following resync: it records the step-counter
+value at the last sync and offsets future targets from it, so the axis does
+not adopt the lagging driver position and stop short.  In three ±50 mm test
+rounds with intermittent 0xE4 errors the axes still returned to their starting
+position within about 0.01 mm.
+
 ## Bring-up and troubleshooting
 
 1. Power the driver from its rated motor supply (12..32 V) and connect its
