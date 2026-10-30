@@ -2,15 +2,13 @@ name: CAN firmware build and release
 
 on:
   push:
-    branches:
-      - can-motor-driver
     tags:
       - "can-v*"
   workflow_dispatch:
     inputs:
-      tag:
-        description: "Release tag (optional; defaults to can-build-<run_number>)"
-        required: false
+      version:
+        description: "Version tag, e.g. can-v0.1.0"
+        required: true
         type: string
 
 permissions:
@@ -24,6 +22,23 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Validate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          if ! [[ "$VERSION" =~ ^can-v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$ ]]; then
+            echo "::error::Version must look like can-vX.Y.Z, got: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION"
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -51,24 +66,9 @@ jobs:
             -o .pio/build/wifi_s3/firmware.addrinfo \
             --build wifi_s3 --verbose
 
-      - name: Determine release tag
-        id: release
-        env:
-          INPUT_TAG: ${{ github.event.inputs.tag }}
-        run: |
-          if [ -n "$INPUT_TAG" ]; then
-            TAG="$INPUT_TAG"
-          elif [[ "$GITHUB_REF" == refs/tags/can-v* ]]; then
-            TAG="${GITHUB_REF#refs/tags/}"
-          else
-            TAG="can-build-${GITHUB_RUN_NUMBER}"
-          fi
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-          echo "version=$TAG" >> "$GITHUB_OUTPUT"
-
       - name: Assemble release files
         env:
-          TAG: ${{ steps.release.outputs.tag }}
+          TAG: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p release-assets
           cp .pio/build/wifi_s3/firmware.factory.bin release-assets/
@@ -135,16 +135,16 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: fluidcan-wifi-s3-${{ steps.release.outputs.tag }}
+          name: fluidcan-wifi-s3-${{ steps.version.outputs.version }}
           path: |
             release-assets/*
-            fluidcan-${{ steps.release.outputs.tag }}.zip
+            fluidcan-${{ steps.version.outputs.version }}.zip
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.release.outputs.tag }}
-          name: FluidCAN ${{ steps.release.outputs.tag }}
+          tag_name: ${{ steps.version.outputs.version }}
+          name: FluidCAN ${{ steps.version.outputs.version }}
           body: |
             Automatic CAN firmware build.
 
@@ -159,7 +159,7 @@ jobs:
             release-assets/manifest.json
             release-assets/SHA256SUMS
             release-assets/firmware.addrinfo
-            fluidcan-${{ steps.release.outputs.tag }}.zip
+            fluidcan-${{ steps.version.outputs.version }}.zip
           draft: false
           prerelease: false
           make_latest: true
