@@ -1,0 +1,165 @@
+name: CAN firmware build and release
+
+on:
+  push:
+    branches:
+      - can-motor-driver
+    tags:
+      - "can-v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (optional; defaults to can-build-<run_number>)"
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: can-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}
+
+      - name: Build ESP32-S3 CAN firmware
+        run: pio run -e wifi_s3
+
+      - name: Generate addrinfo
+        run: |
+          python tools/stack_trace_decoder/generate_addrinfo.py \
+            .pio/build/wifi_s3/firmware.elf \
+            -o .pio/build/wifi_s3/firmware.addrinfo \
+            --build wifi_s3 --verbose
+
+      - name: Determine release tag
+        id: release
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          if [ -n "$INPUT_TAG" ]; then
+            TAG="$INPUT_TAG"
+          elif [[ "$GITHUB_REF" == refs/tags/can-v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+          else
+            TAG="can-build-${GITHUB_RUN_NUMBER}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$TAG" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble release files
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          mkdir -p release-assets
+          cp .pio/build/wifi_s3/firmware.factory.bin release-assets/
+          cp .pio/build/wifi_s3/firmware.bin release-assets/
+          cp .pio/build/wifi_s3/bootloader.bin release-assets/
+          cp .pio/build/wifi_s3/partitions.bin release-assets/
+          cp .pio/build/wifi_s3/firmware.addrinfo release-assets/
+          python - "$TAG" <<'PY'
+          import hashlib, json, os, sys
+          tag = sys.argv[1]
+          d = "release-assets"
+          def digest(name):
+              h = hashlib.sha256()
+              with open(os.path.join(d, name), "rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+          def info(name, offset, key):
+              return {
+                  "size": os.path.getsize(os.path.join(d, name)),
+                  "offset": offset,
+                  "path": name,
+                  "signature": {"algorithm": "SHA2-256", "value": digest(name)},
+              }
+          manifest = {
+              "name": "FluidCAN",
+              "version": tag,
+              "source_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/{os.environ['GITHUB_SHA']}",
+              "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}",
+              "images": {
+                  "fluidcan-factory": info("firmware.factory.bin", "0x0", "factory"),
+                  "fluidcan-app": info("firmware.bin", "0x10000", "app"),
+                  "fluidcan-bootloader": info("bootloader.bin", "0x1000", "bootloader"),
+                  "fluidcan-partitions": info("partitions.bin", "0x8000", "partitions"),
+              },
+              "installable": {
+                  "name": "installable",
+                  "description": "FluidCAN CAN firmware",
+                  "choice-name": "Processor type",
+                  "choices": [{
+                      "name": "esp32s3",
+                      "description": "ESP32-S3-WROOM-1",
+                      "choice-name": "安装方式",
+                      "choices": [{
+                          "name": "can-full",
+                          "description": "完整写入 CAN 固件（factory image @ 0x0）",
+                          "erase": True,
+                          "images": ["fluidcan-factory"],
+                      }],
+                  }],
+              },
+          }
+          with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+          with open(os.path.join(d, "SHA256SUMS"), "w", encoding="utf-8") as f:
+              for name in ["firmware.factory.bin", "firmware.bin", "bootloader.bin", "partitions.bin"]:
+                  f.write(f"{digest(name)}  {name}\n")
+          PY
+          cd release-assets
+          zip -9 "../fluidcan-${TAG}.zip" *
+          cd ..
+          ls -lh release-assets "fluidcan-${TAG}.zip"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: fluidcan-wifi-s3-${{ steps.release.outputs.tag }}
+          path: |
+            release-assets/*
+            fluidcan-${{ steps.release.outputs.tag }}.zip
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.release.outputs.tag }}
+          name: FluidCAN ${{ steps.release.outputs.tag }}
+          body: |
+            Automatic CAN firmware build.
+
+            Board: ESP32-S3-WROOM-1 / wifi_s3
+            Source: `${{ github.sha }}`
+            Installer manifest: `manifest.json`
+          files: |
+            release-assets/firmware.factory.bin
+            release-assets/firmware.bin
+            release-assets/bootloader.bin
+            release-assets/partitions.bin
+            release-assets/manifest.json
+            release-assets/SHA256SUMS
+            release-assets/firmware.addrinfo
+            fluidcan-${{ steps.release.outputs.tag }}.zip
+          draft: false
+          prerelease: false
+          make_latest: true
