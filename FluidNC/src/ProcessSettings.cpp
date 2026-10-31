@@ -44,7 +44,7 @@
 
 #include <Arduino.h>  // PIN_LED
 
-#if defined(ESP32)
+#if defined(ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
 #    include "driver/gpio.h"  // gpio_set_pull_mode() for the bit-bang I2C scan
 #endif
 
@@ -1078,7 +1078,7 @@ static Error list_parameters(const char* value, AuthenticationLevel auth_level, 
 }
 
 #if MAX_N_I2C
-#if defined(ESP32)
+#if defined(ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
 // Software ("bit-bang") I2C probe, independent of the Arduino Wire driver.
 // It can tell a real NACK (no device) apart from a driver-level transaction
 // error, which is useful when the hardware I2C driver reports only errors.
@@ -1169,11 +1169,14 @@ static int scan_i2c_range(objnum_t bus_number, bool backwards) {
         // problems with zero-size transactions, which show up as timeouts
         // instead of the expected ACK/NACK.
         int rc = i2c_write(bus_number, uint8_t(address), probe, 1);
-        if (rc == 0) {
+        // i2c_write() returns the byte count on ACK, or a negative error code.
+        // The old check treated 0 as success, so a working device could still
+        // be reported as "no devices".
+        if (rc == 1 || rc == 0) {
             log_info("  I2C device at " << to_hex(uint32_t(address)));
             ++found;
-        } else if (rc == 2 || rc == -2 || rc == 3 || rc == -3) {
-            ++nack;  // address or data NACK: the bus works, nothing is there
+        } else if (rc == -2 || rc == -3) {
+            ++nack;  // address/data NACK: bus is alive, no device at this address
         } else {
             if (!firstErr) {
                 firstErr = rc;
@@ -1228,7 +1231,7 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
             scan_i2c_range(1, true);
         }
 #    endif
-#if defined(ESP32)
+#if defined(ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
         if (bus == 0) {
             log_info("I2C0 software (bit-bang) scan, normal pins");
             log_info(" forward:");
@@ -1826,3 +1829,4 @@ Error execute_line(const char* line, Channel& channel, AuthenticationLevel auth_
     }
     return result;
 }
+
