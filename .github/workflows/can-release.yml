@@ -57,25 +57,25 @@ jobs:
           key: can-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}
 
       - name: Build ESP32-S3 CAN firmware
-        run: pio run -e wifi_s3
+        run: pio run -e wifi_s3_oled
 
       - name: Generate addrinfo
         run: |
           python tools/stack_trace_decoder/generate_addrinfo.py \
-            .pio/build/wifi_s3/firmware.elf \
-            -o .pio/build/wifi_s3/firmware.addrinfo \
-            --build wifi_s3 --verbose
+            .pio/build/wifi_s3_oled/firmware.elf \
+            -o .pio/build/wifi_s3_oled/firmware.addrinfo \
+            --build wifi_s3_oled --verbose
 
       - name: Assemble release files
         env:
           TAG: ${{ steps.version.outputs.version }}
         run: |
           mkdir -p release-assets
-          cp .pio/build/wifi_s3/firmware.factory.bin release-assets/
-          cp .pio/build/wifi_s3/firmware.bin release-assets/
-          cp .pio/build/wifi_s3/bootloader.bin release-assets/
-          cp .pio/build/wifi_s3/partitions.bin release-assets/
-          cp .pio/build/wifi_s3/firmware.addrinfo release-assets/
+          cp .pio/build/wifi_s3_oled/firmware.factory.bin release-assets/
+          cp .pio/build/wifi_s3_oled/firmware.bin release-assets/
+          cp .pio/build/wifi_s3_oled/bootloader.bin release-assets/
+          cp .pio/build/wifi_s3_oled/partitions.bin release-assets/
+          cp .pio/build/wifi_s3_oled/firmware.addrinfo release-assets/
           python - "$TAG" <<'PY'
           import hashlib, json, os, sys
           tag = sys.argv[1]
@@ -135,7 +135,7 @@ jobs:
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: fluidcan-wifi-s3-${{ steps.version.outputs.version }}
+          name: fluidcan-wifi-s3-oled-${{ steps.version.outputs.version }}
           path: |
             release-assets/*
             fluidcan-${{ steps.version.outputs.version }}.zip
@@ -148,7 +148,8 @@ jobs:
           body: |
             Automatic CAN firmware build.
 
-            Board: ESP32-S3-WROOM-1 / wifi_s3
+            Board: ESP32-S3-WROOM-1 / wifi_s3_oled
+            Display: SSD1306 128x64 on i2c0 (SDA GPIO8 / SCL GPIO9, address 0x3C)
             Source: `${{ github.sha }}`
             Installer manifest: `manifest.json`
           files: |
