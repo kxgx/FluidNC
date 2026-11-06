@@ -311,4 +311,22 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 M150..M159 use the reserved M100..M199 user-code modal group.  They return
 `ok` immediately after the CAN operation; do not combine them with motion
 words in the same block.
+## Position-loop tuning
+
+Two optional per-driver settings are written during the CAN sync sequence:
+
+```yaml
+pd42s1:
+  max_torque_ma: 1500      # command 0x64, -1 = leave driver unchanged
+  position_pid_p: 250      # command 0x63
+  position_pid_i: 6
+  position_pid_d: 100
+```
+
+Both default to `-1`, which leaves the driver's existing values alone.  The
+values are re-sent on every sync so a driver reset cannot silently restore a
+much stiffer loop.  For a dual-Y gantry with only one limit switch, keep the
+master motor at its normal torque/PID and lower the slave's `max_torque_ma`
+(and optionally its position-loop gains) so it assists instead of fighting the
+master.
 

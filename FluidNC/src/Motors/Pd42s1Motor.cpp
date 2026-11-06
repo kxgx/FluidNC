@@ -406,6 +406,11 @@ namespace MotorDrivers {
             return false;
         }
 
+        // Apply the optional per-driver position-loop tuning.  These values
+        // are re-sent on every sync so a driver reset cannot silently restore
+        // a much stiffer loop.
+        apply_driver_tuning();
+
         // On a resync after a lost command/error, keep the current desired
         // target instead of adopting the driver's (possibly lagging) position,
         // otherwise the axis would silently stop short of the commanded move.
@@ -429,6 +434,38 @@ namespace MotorDrivers {
                          << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "." << int(hardwareVersion % 10)
                          << " position:" << position);
         return true;
+    }
+
+    void Pd42s1Motor::apply_driver_tuning() {
+        if (!_bus || !_bus->ready()) {
+            return;
+        }
+
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+
+        if (_maxTorqueMa >= 0) {
+            size_t len = Pd42s1Protocol::build_set_max_torque_command(
+                uint8_t(_address), uint16_t(_maxTorqueMa), request, sizeof(request));
+            if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
+                !Pd42s1Protocol::parse_ack(response, responseLen)) {
+                warn_throttled(now_ms(), "setting max torque failed");
+            } else {
+                can_log_info("CAN: " << name() << " max torque=" << _maxTorqueMa << " mA");
+            }
+        }
+
+        if (_positionPidP >= 0 && _positionPidI >= 0 && _positionPidD >= 0) {
+            size_t len = Pd42s1Protocol::build_set_position_pid_command(
+                uint8_t(_address), uint32_t(_positionPidP), uint32_t(_positionPidI), uint32_t(_positionPidD), request, sizeof(request));
+            if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
+                !Pd42s1Protocol::parse_ack(response, responseLen)) {
+                warn_throttled(now_ms(), "setting position PID failed");
+            } else {
+                can_log_info("CAN: " << name() << " position PID=" << _positionPidP << "," << _positionPidI << "," << _positionPidD);
+            }
+        }
     }
 
     void Pd42s1Motor::apply_disable(uint32_t nowMs) {

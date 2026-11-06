@@ -51,6 +51,8 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_READ_POS_ERROR   = 0x2B;
         static constexpr uint8_t FUNC_RESTART          = 0x02;  // reset/reboot the driver
         static constexpr uint8_t FUNC_SAVE_PARAMS      = 0x04;  // save parameters to NVRAM
+        static constexpr uint8_t FUNC_SET_POSITION_PID = 0x63;  // position-loop PID
+        static constexpr uint8_t FUNC_SET_MAX_TORQUE   = 0x64;  // position-loop current limit, mA
         static constexpr uint8_t FUNC_SET_CAN_BAUD     = 0x68;  // new CAN bit rate in kbps
         static constexpr uint8_t FUNC_SET_ECHO         = 0x6F;
         static constexpr uint8_t FUNC_CLEAR_STALL      = 0xF9;  // clear stall protection
@@ -59,7 +61,7 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_STOP_NOW         = 0xFC;  // brake immediately
         static constexpr uint8_t FUNC_POSITION_MODE    = 0xF2;
 
-        static constexpr size_t MAX_FRAME_LEN = 16;
+        static constexpr size_t MAX_FRAME_LEN = 32;
 
         // Low 8 bits of the sum of data[0..len-1].
         static uint8_t checksum(const uint8_t* data, size_t len);
@@ -88,6 +90,13 @@ namespace MotorDrivers {
         // Builds the immediate-brake command (0xFC).  The manual warns that
         // the motor can get hot if the state is not cleared afterwards.
         static size_t build_stop_now_command(uint8_t address, uint8_t* out, size_t out_size);
+
+        // Builds the position-loop PID command (0x63), three uint32 values.
+        static size_t build_set_position_pid_command(
+            uint8_t address, uint32_t p, uint32_t i, uint32_t d, uint8_t* out, size_t out_size);
+
+        // Builds the position-loop maximum torque/current command (0x64), mA.
+        static size_t build_set_max_torque_command(uint8_t address, uint16_t milliamps, uint8_t* out, size_t out_size);
 
         // Builds the CAN bit-rate command (0x68, value in kbps, e.g. 1000).
         static size_t build_set_can_baud_command(uint8_t address, uint16_t kbps, uint8_t* out, size_t out_size);

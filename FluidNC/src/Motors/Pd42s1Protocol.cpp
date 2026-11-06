@@ -67,6 +67,21 @@ namespace MotorDrivers {
         return build_frame(address, FUNC_STOP_NOW, nullptr, 0, out, out_size);
     }
 
+    size_t Pd42s1Protocol::build_set_position_pid_command(
+        uint8_t address, uint32_t p, uint32_t i, uint32_t d, uint8_t* out, size_t out_size) {
+        uint8_t data[12] = {
+            uint8_t(p >> 24), uint8_t(p >> 16), uint8_t(p >> 8), uint8_t(p),
+            uint8_t(i >> 24), uint8_t(i >> 16), uint8_t(i >> 8), uint8_t(i),
+            uint8_t(d >> 24), uint8_t(d >> 16), uint8_t(d >> 8), uint8_t(d),
+        };
+        return build_frame(address, FUNC_SET_POSITION_PID, data, sizeof(data), out, out_size);
+    }
+
+    size_t Pd42s1Protocol::build_set_max_torque_command(uint8_t address, uint16_t milliamps, uint8_t* out, size_t out_size) {
+        uint8_t data[2] = { uint8_t(milliamps >> 8), uint8_t(milliamps & 0xFF) };
+        return build_frame(address, FUNC_SET_MAX_TORQUE, data, sizeof(data), out, out_size);
+    }
+
     size_t Pd42s1Protocol::build_set_can_baud_command(uint8_t address, uint16_t kbps, uint8_t* out, size_t out_size) {
         uint8_t data[2] = { uint8_t(kbps >> 8), uint8_t(kbps & 0xFF) };
         return build_frame(address, FUNC_SET_CAN_BAUD, data, sizeof(data), out, out_size);

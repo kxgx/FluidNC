@@ -122,6 +122,29 @@ namespace MotorDrivers {
             // Interval in milliseconds between driver position readbacks, used
             // for diagnostics.  Set to 0 to disable readbacks.
             handler.item("status_poll_ms", _statusPollMs, 0, 60000);
+
+            // @config max_torque_ma
+            // @default -1
+            // @tuning per-machine
+            // Position-loop current limit written to the driver with command
+            // 0x64.  -1 leaves the driver's existing setting untouched.
+            // Reduce it on the slave motor of a mechanically coupled pair so
+            // that it assists instead of fighting the master.
+            handler.item("max_torque_ma", _maxTorqueMa, -1, 3000);
+
+            // @config position_pid_p
+            // @default -1
+            // @tuning per-machine
+            // Position-loop PID values written to the driver with command
+            // 0x63.  All three must be non-negative; -1 leaves the driver's
+            // existing values untouched.
+            handler.item("position_pid_p", _positionPidP, -1, 1000000);
+            // @config position_pid_i
+            // @default -1
+            handler.item("position_pid_i", _positionPidI, -1, 1000000);
+            // @config position_pid_d
+            // @default -1
+            handler.item("position_pid_d", _positionPidD, -1, 1000000);
         }
 
     protected:
@@ -139,6 +162,7 @@ namespace MotorDrivers {
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         bool     send_target_nowait(uint32_t target);
         bool     send_target_nowait_locked(uint32_t target);
+        void     apply_driver_tuning();
         void     register_instance();
         void     unregister_instance();
         bool     is_sync_group_leader() const;
@@ -158,6 +182,11 @@ namespace MotorDrivers {
         int32_t  _accel           = 200;
         uint32_t _updateMs        = 20;
         uint32_t _statusPollMs    = 1000;
+        int32_t  _maxTorqueMa     = -1;
+        int32_t  _positionPidP    = -1;
+        int32_t  _positionPidI    = -1;
+        int32_t  _positionPidD    = -1;
+        bool     _tuningApplied   = false;
 
         // State written by the step ISR.  These are plain members of a small
         // heap object (internal DRAM on the ESP32), so reading and writing
