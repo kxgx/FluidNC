@@ -761,7 +761,11 @@ static void protocol_do_alarm(void* alarmVoid) {
         return;
     }
     if (lastAlarm == ExecAlarm::HardLimit || lastAlarm == ExecAlarm::HardStop) {
-        protocol_disable_steppers();
+        // A limit alarm must stop applying torque immediately, even when
+        // stepping.idle_ms is the special "stay enabled" value 255 and even
+        // while homing. The normal idle-disable helper deliberately leaves
+        // motors enabled in those cases, so force the disable here.
+        Axes::set_disable(true, true);
         Homing::set_all_axes_unhomed();
         set_state(State::Critical);  // Set system alarm state
         alarm_msg(lastAlarm);
@@ -769,6 +773,9 @@ static void protocol_do_alarm(void* alarmVoid) {
         return;
     }
     if (lastAlarm == ExecAlarm::SoftLimit) {
+        // Soft-limit alarms also stop motion; remove torque so the machine
+        // cannot be pushed further into the forbidden region.
+        Axes::set_disable(true, true);
         set_state(State::Critical);  // Set system alarm state
         alarm_msg(lastAlarm);
         report_error_message(Message::CriticalEvent);
