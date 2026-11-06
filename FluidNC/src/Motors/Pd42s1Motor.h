@@ -23,12 +23,13 @@
 #if MAX_N_CAN
 
 #    include "Machine/CanBus.h"
+#    include <vector>
 
 namespace MotorDrivers {
     class Pd42s1Motor final : public MotorDriver, public Machine::CanBusClient {
     public:
-        Pd42s1Motor(const char* name) : MotorDriver(name) { Machine::CanBus::mark_driver_configured(); }
-        ~Pd42s1Motor() override { Machine::CanBus::unmark_driver_configured(); }
+        Pd42s1Motor(const char* name);
+        ~Pd42s1Motor() override;
 
         // MotorDriver overrides
         void init() override;
@@ -57,6 +58,16 @@ namespace MotorDrivers {
             // written to the driver with setting 0x60 (set slave address).
             // Address 0 is the broadcast address and cannot be used here.
             handler.item("address", _address, 1, 255);
+
+            // @config sync_group
+            // @default 0
+            // @tuning per-machine
+            // Optional position-update group. Motors with the same non-zero
+            // sync_group have their absolute-position targets sent back-to-back
+            // from one CAN worker pass. Each motor still applies its own
+            // invert_direction, so direction configuration is unchanged.
+            // 0 disables grouping (normal independent streaming).
+            handler.item("sync_group", _syncGroup, 0, 255);
 
             // @config counts_per_step
             // @default 1.0
@@ -127,6 +138,11 @@ namespace MotorDrivers {
         void     apply_disable(uint32_t nowMs);
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         bool     send_target_nowait(uint32_t target);
+        bool     send_target_nowait_locked(uint32_t target);
+        void     register_instance();
+        void     unregister_instance();
+        bool     is_sync_group_leader() const;
+        void     send_sync_group_targets(uint32_t nowMs);
         void     poll_position();
         uint32_t target_position() const;
         void     warn_throttled(uint32_t nowMs, const char* message);
@@ -135,6 +151,7 @@ namespace MotorDrivers {
 
         // Configuration
         int32_t  _address         = 1;
+        int32_t  _syncGroup       = 0;
         float    _countsPerStep   = 1.0f;
         bool     _invertDirection = false;
         int32_t  _speedRpm        = 600;
@@ -180,7 +197,13 @@ namespace MotorDrivers {
         // last transaction succeeded.  Used to trigger automatic clearing of
         // the driver's abnormal state.
         uint8_t _lastErrorCode = 0;
+
+        // All configured PD42S1 motors, for sync_group batching. Config is
+        // loaded before the CAN worker starts, so this list is stable during
+        // operation.
+        static std::vector<Pd42s1Motor*> _instances;
     };
 }
 
 #endif  // MAX_N_CAN
+

@@ -127,6 +127,40 @@ it feels jerky.
   updates; keep the total CAN load in mind when using many axes or a low
   `update_ms`.
 
+## Synchronized motor groups (sync_group)
+
+For a gantry or any axis with two motors (for example Y0/Y1), setting the
+same non-zero `sync_group` on both drivers makes the CAN worker send their
+position targets in one uninterrupted batch:
+
+```yaml
+axes:
+  y:
+    motor0:
+      pd42s1:
+        address: 2
+        invert_direction: false
+        sync_group: 1
+    motor1:
+      pd42s1:
+        address: 3
+        invert_direction: true
+        sync_group: 1
+```
+
+The lowest-addressed active member of the group is the sender.  It holds the
+CAN bus lock for the whole group, so a status readback or another axis cannot
+insert a frame between Y0 and Y1.  Each motor still builds its target from its
+own `invert_direction`, so reversing one motor in the configuration remains
+independent.
+
+The private PD42S1 protocol requires at least `MIN_INSTRUCTION_GAP_MS` (2 ms)
+between complete instructions.  Grouping therefore means "same worker pass,
+back-to-back, no unrelated frames", not electrical simultaneity.  For true
+simultaneous updates use a protocol with SYNC/CSP or the driver's hardware
+pulse mode.
+
+`sync_group: 0` (the default) keeps the original independent streaming.
 ## Position scaling and resync
 
 Driver position units per axis millimetre:
@@ -277,3 +311,4 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 M150..M159 use the reserved M100..M199 user-code modal group.  They return
 `ok` immediately after the CAN operation; do not combine them with motion
 words in the same block.
+

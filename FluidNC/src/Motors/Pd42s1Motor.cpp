@@ -20,6 +20,91 @@
 using namespace Machine;
 
 namespace MotorDrivers {
+    // Static registry for sync_group batching.  Configuration is loaded before
+    // the CAN worker starts, so no lock is needed here.
+    std::vector<Pd42s1Motor*> Pd42s1Motor::_instances;
+
+    Pd42s1Motor::Pd42s1Motor(const char* name) : MotorDriver(name) {
+        Machine::CanBus::mark_driver_configured();
+        register_instance();
+    }
+
+    Pd42s1Motor::~Pd42s1Motor() {
+        unregister_instance();
+        Machine::CanBus::unmark_driver_configured();
+    }
+
+    void Pd42s1Motor::register_instance() {
+        _instances.push_back(this);
+    }
+
+    void Pd42s1Motor::unregister_instance() {
+        for (auto it = _instances.begin(); it != _instances.end(); ++it) {
+            if (*it == this) {
+                _instances.erase(it);
+                break;
+            }
+        }
+    }
+
+    bool Pd42s1Motor::is_sync_group_leader() const {
+        if (_syncGroup == 0) {
+            return true;
+        }
+        // The lowest-addressed *active* member of the group is the sender.
+        // If that motor is missing or disabled, the next member takes over
+        // instead of leaving the whole group without position updates.
+        const Pd42s1Motor* leader = nullptr;
+        for (Pd42s1Motor* m : _instances) {
+            if (m->_syncGroup != _syncGroup || !m->_synced || m->_disabled) {
+                continue;
+            }
+            if (!leader || m->_address < leader->_address) {
+                leader = m;
+            }
+        }
+        return leader == this;
+    }
+
+    void Pd42s1Motor::send_sync_group_targets(uint32_t nowMs) {
+        if (!_bus || !_bus->ready()) {
+            return;
+        }
+
+        {
+            // One lock covers the whole group batch.  No status query and no
+            // other motor can inject a frame between Y0 and Y1.
+            CanBus::Lock lock(*_bus);
+            _bus->flush_receive();
+
+            for (Pd42s1Motor* m : _instances) {
+                if (m->_syncGroup != _syncGroup || !m->_synced || m->_disabled) {
+                    continue;
+                }
+                uint32_t target = m->target_position();
+                if (m->_targetDirty || target != m->_lastTarget) {
+                    if (target != m->_lastTarget) {
+                        m->_lastTargetChangeMs = nowMs;
+                        m->_finalTargetAcked   = false;
+                    }
+                    m->send_target_nowait_locked(target);
+                }
+            }
+        }
+
+        // Final delivery confirmation is separate from the real-time batch;
+        // it needs the driver's application ACK and is only sent after motion
+        // has stopped.
+        for (Pd42s1Motor* m : _instances) {
+            if (m->_syncGroup == _syncGroup && m->_synced && !m->_disabled &&
+                !m->_finalTargetAcked && int32_t(nowMs - m->_lastTargetChangeMs) > 50) {
+                if (m->send_target(m->_lastTarget, 50)) {
+                    m->_finalTargetAcked = true;
+                }
+            }
+        }
+    }
+
     namespace {
         constexpr uint32_t TRANSACTION_TIMEOUT_MS = 50;
         constexpr uint32_t RETRY_MS               = 500;
@@ -462,6 +547,16 @@ namespace MotorDrivers {
             _targetDirty = true;
             return false;
         }
+        CanBus::Lock lock(*_bus);
+        _bus->flush_receive();
+        return send_target_nowait_locked(target);
+    }
+
+    // Same as send_target_nowait(), but the caller already holds the CanBus
+    // Lock.  This lets a sync_group put all of its position commands on the
+    // wire in one uninterrupted batch instead of letting a status query or
+    // another motor interleave between Y0 and Y1.
+    bool Pd42s1Motor::send_target_nowait_locked(uint32_t target) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  len = Pd42s1Protocol::build_position_command(
             uint8_t(_address), uint8_t(_accel), uint16_t(_speedRpm), target, request, sizeof(request));
@@ -469,8 +564,6 @@ namespace MotorDrivers {
             _targetDirty = true;
             return false;
         }
-        CanBus::Lock lock(*_bus);
-        _bus->flush_receive();
         if (!_bus->send_message(request, len, TRANSACTION_TIMEOUT_MS)) {
             _bus->flush_transmit();
             _targetDirty = true;
@@ -509,29 +602,47 @@ namespace MotorDrivers {
         }
 
         if (!_disabled) {
-            if (int32_t(nowMs - _nextUpdateMs) >= 0) {
-                _nextUpdateMs += _updateMs;
-                if (int32_t(nowMs - _nextUpdateMs) > 0) {
-                    // Far behind (bus stall / long transaction): resynchronise
-                    // the cadence instead of bursting several stale targets.
-                    _nextUpdateMs = nowMs + _updateMs;
+            if (_syncGroup == 0) {
+                // Normal independent target streaming.
+                if (int32_t(nowMs - _nextUpdateMs) >= 0) {
+                    _nextUpdateMs += _updateMs;
+                    if (int32_t(nowMs - _nextUpdateMs) > 0) {
+                        // Far behind (bus stall / long transaction): resynchronise
+                        // the cadence instead of bursting several stale targets.
+                        _nextUpdateMs = nowMs + _updateMs;
+                    }
+                    uint32_t target = target_position();
+                    if (_targetDirty || target != _lastTarget) {
+                        if (target != _lastTarget) {
+                            _lastTargetChangeMs = nowMs;
+                            _finalTargetAcked   = false;
+                        }
+                        send_target_nowait(target);
+                    } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
+                        // Motion has stopped; re-send the final target with an
+                        // acknowledgement so a dropped fire-and-forget frame
+                        // cannot leave the axis a few millimetres short.
+                        if (send_target(target, TRANSACTION_TIMEOUT_MS)) {
+                            _finalTargetAcked = true;
+                        }
+                    }
                 }
-                uint32_t target = target_position();
-                if (_targetDirty || target != _lastTarget) {
-                    if (target != _lastTarget) {
-                        _lastTargetChangeMs = nowMs;
-                        _finalTargetAcked   = false;
+            } else if (is_sync_group_leader()) {
+                // All members of this sync_group are sent from one worker
+                // pass.  No other client runs between these frames, and each
+                // member still builds its own target from its own
+                // invert_direction, so Y0/Y1 direction configuration remains
+                // independent.
+                if (int32_t(nowMs - _nextUpdateMs) >= 0) {
+                    _nextUpdateMs += _updateMs;
+                    if (int32_t(nowMs - _nextUpdateMs) > 0) {
+                        _nextUpdateMs = nowMs + _updateMs;
                     }
-                    send_target_nowait(target);
-                } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
-                    // Motion has stopped; re-send the final target with an
-                    // acknowledgement so a dropped fire-and-forget frame
-                    // cannot leave the axis a few millimetres short.
-                    if (send_target(target, TRANSACTION_TIMEOUT_MS)) {
-                        _finalTargetAcked = true;
-                    }
+                    send_sync_group_targets(nowMs);
                 }
             }
+            // A non-leader sync_group member intentionally does not stream its
+            // own target here; the leader sends it in the same batch.
         }
 
         if (_statusPollMs && int32_t(nowMs - _nextStatusMs) >= 0) {
@@ -547,3 +658,4 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
+
