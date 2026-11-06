@@ -93,7 +93,7 @@ jobs:
             python tools/stack_trace_decoder/generate_addrinfo.py \
               ".pio/build/$env/firmware.elf" \
               -o ".pio/build/$env/firmware.addrinfo" \
-              --build "$env" --verbose
+              --build "$env" --mcu esp32s3 --verbose
           done
 
       - name: Assemble release files
