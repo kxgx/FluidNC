@@ -72,7 +72,8 @@ jobs:
             wifi_s3_oled_usb \
             wifi_s3_octalPSRAM_oled_usb \
             wifi_s3_oled_usb_4mb \
-            wifi_s3_octalPSRAM_oled_usb_4mb; do
+            wifi_s3_octalPSRAM_oled_usb_4mb \
+            wifi_s3_oled_usb_4mb_nopsram; do
             pio run -e "$env"
           done
 
@@ -87,7 +88,8 @@ jobs:
             wifi_s3_oled_usb \
             wifi_s3_octalPSRAM_oled_usb \
             wifi_s3_oled_usb_4mb \
-            wifi_s3_octalPSRAM_oled_usb_4mb; do
+            wifi_s3_octalPSRAM_oled_usb_4mb \
+            wifi_s3_oled_usb_4mb_nopsram; do
             python tools/stack_trace_decoder/generate_addrinfo.py \
               ".pio/build/$env/firmware.elf" \
               -o ".pio/build/$env/firmware.addrinfo" \
@@ -117,6 +119,7 @@ jobs:
             wifi_s3_octalPSRAM_oled_usb s3-octal-oled-usb
             wifi_s3_oled_usb_4mb s3-quad-oled-usb-4mb
             wifi_s3_octalPSRAM_oled_usb_4mb s3-octal-oled-usb-4mb
+            wifi_s3_oled_usb_4mb_nopsram s3-quad-nopsram-oled-usb-4mb
           "
           echo "$variants" | while read -r env label; do
             [ -z "$env" ] && continue
@@ -232,6 +235,7 @@ jobs:
             | `wifi_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `s3-octal-oled-usb-` |
             | `wifi_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `s3-quad-oled-usb-4mb-` |
             | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `s3-octal-oled-usb-4mb-` |
+            | `wifi_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `s3-quad-nopsram-oled-usb-4mb-` |
 
             The 4 MB variants use a single application slot (no OTA fallback).
             Do not flash an 8 MB image onto a 4 MB module, and do not use a Quad
