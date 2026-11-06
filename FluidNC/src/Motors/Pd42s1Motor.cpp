@@ -522,6 +522,7 @@ namespace MotorDrivers {
             if (_writeFailures >= 3) {
                 _writeFailures = 0;
                 _synced        = false;  // resync re-enables command echo and retries
+                report_driver_fault("motor enable/disable command failed");
             }
             warn_throttled(nowMs, "motor enable/disable command failed");
         }
@@ -631,6 +632,11 @@ namespace MotorDrivers {
             _bus->flush_transmit();
             _targetDirty = true;
             _writeFailures++;
+            if (_writeFailures >= 3) {
+                _writeFailures = 0;
+                _synced        = false;
+                report_driver_fault("position stream write failed");
+            }
             return false;
         }
         _lastTarget   = target;
