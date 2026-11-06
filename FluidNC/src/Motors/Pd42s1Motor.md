@@ -329,4 +329,17 @@ much stiffer loop.  For a dual-Y gantry with only one limit switch, keep the
 master motor at its normal torque/PID and lower the slave's `max_torque_ma`
 (and optionally its position-loop gains) so it assists instead of fighting the
 master.
+## Lost-driver safety
+
+A previously working driver that stops answering is treated as a motion fault,
+not as a harmless diagnostic failure:
+
+- after repeated readback, target-ACK or sync failures, the motor driver
+  deasserts the shared enable, forces all motors off and raises a HardStop
+  alarm;
+- the sync failure path first sends `0x6F=0` to the affected address before
+  falling back to the bus-wide echo recovery, so a driver that missed a
+  broadcast can still be recovered;
+- `$CANReset` can be used from Idle to reboot the drivers and resynchronise
+  them; it is not sent during motion.
 

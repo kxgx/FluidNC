@@ -167,6 +167,7 @@ namespace MotorDrivers {
         void     unregister_instance();
         bool     is_sync_group_leader() const;
         void     send_sync_group_targets(uint32_t nowMs);
+        void     report_driver_fault(const char* reason);
         void     poll_position();
         uint32_t target_position() const;
         void     warn_throttled(uint32_t nowMs, const char* message);
@@ -221,6 +222,8 @@ namespace MotorDrivers {
         // considered lost and re-synchronised.
         uint8_t _writeFailures = 0;
         uint8_t _readFailures  = 0;
+        uint8_t _syncFailures  = 0;
+        bool    _faultLatched  = false;
 
         // Status byte of the last non-OK response (0xE1..0xE6); zero when the
         // last transaction succeeded.  Used to trigger automatic clearing of

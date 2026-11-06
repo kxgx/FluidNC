@@ -10,6 +10,8 @@
 #    include "Machine/MachineConfig.h"
 #    include "Motors/Pd42s1Protocol.h"
 #    include "Stepping.h"
+#    include "Protocol.h"
+#    include "Machine/Axes.h"
 
 #    include <esp_timer.h>
 
@@ -379,12 +381,19 @@ namespace MotorDrivers {
                      Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
         if (!ok) {
             // Auto-configuration leaves command echo disabled, but normal
-            // control needs acknowledgments.  Re-enable echo (throttled so a
-            // few silent motors cannot flood the bus) and retry the read.
-            _bus->ensure_driver_echo();
-            vTaskDelay(pdMS_TO_TICKS(30));
+            // control needs acknowledgments.  Try this motor's address first;
+            // a broadcast can be missed by exactly the silent driver we are
+            // trying to recover.  Then fall back to the all-address recovery.
+            _bus->enable_driver_echo(uint8_t(_address));
+            vTaskDelay(pdMS_TO_TICKS(10));
             ok = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
                  Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
+            if (!ok) {
+                _bus->ensure_driver_echo();
+                vTaskDelay(pdMS_TO_TICKS(30));
+                ok = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
+                     Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
+            }
         }
         if (!ok) {
             _readFailures++;
@@ -429,11 +438,26 @@ namespace MotorDrivers {
         _online           = true;
         _readFailures     = 0;
         _writeFailures    = 0;
+        _syncFailures     = 0;
+        _faultLatched     = false;
 
         can_log_info("CAN: " << name() << " address:" << _address << " online, firmware V" << int(firmwareVersion / 10) << "."
                          << int(firmwareVersion % 10) << " hardware V" << int(hardwareVersion / 10) << "." << int(hardwareVersion % 10)
                          << " position:" << position);
         return true;
+    }
+
+    void Pd42s1Motor::report_driver_fault(const char* reason) {
+        if (_faultLatched) {
+            return;
+        }
+        _faultLatched = true;
+        can_log_error("CAN: " << name() << " address:" << _address << " lost (" << reason << "); stopping all motors");
+        // Remove torque from every driver immediately.  The CAN disable
+        // requests are queued for the worker; the shared enable pin is also
+        // deasserted here.
+        Axes::set_disable(true, true);
+        send_alarm(ExecAlarm::HardStop);
     }
 
     void Pd42s1Motor::apply_driver_tuning() {
@@ -530,6 +554,7 @@ namespace MotorDrivers {
             if (_writeFailures >= 3) {
                 _writeFailures = 0;
                 _synced        = false;  // resync (and re-enable echo) after repeated failures
+                report_driver_fault("position command not acknowledged");
             }
             return false;
         }
@@ -562,6 +587,7 @@ namespace MotorDrivers {
             if (_readFailures >= 3) {
                 _readFailures = 0;
                 _synced       = false;  // resync (and re-enable echo) after repeated failures
+                report_driver_fault("position readback failed");
             }
         }
     }
@@ -630,6 +656,10 @@ namespace MotorDrivers {
             } else {
                 _online = false;
                 warn_throttled(nowMs, "driver did not answer CAN init sequence");
+                if (_everSynced && ++_syncFailures >= 3) {
+                    _syncFailures = 0;
+                    report_driver_fault("CAN init sequence failed");
+                }
             }
             return;
         }
