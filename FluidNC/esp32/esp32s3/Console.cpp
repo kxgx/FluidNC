@@ -1,13 +1,19 @@
 #include <sdkconfig.h>
 #include <esp_idf_version.h>
 
-#if defined(CONFIG_TINYUSB_CDC_ENABLED) && defined(IDFBUILD)
+#if ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
+#    include "HWCDCChannel.h"
+#elif defined(CONFIG_TINYUSB_CDC_ENABLED) && defined(IDFBUILD)
 #    include "USBCDCChannel_IDF.h"
 #else
 #    include "USBCDCChannel.h"
 #endif
 
+#if ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT
+HWCDCChannel CDCChannel(true);
+#else
 USBCDCChannel CDCChannel(true);
+#endif
 
 #include "UartChannel.h"
 

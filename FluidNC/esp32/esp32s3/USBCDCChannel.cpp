@@ -3,6 +3,8 @@
 
 #include "USBCDCChannel.h"
 
+#if !(ARDUINO_USB_MODE && ARDUINO_USB_CDC_ON_BOOT)
+
 #include "Machine/MachineConfig.h"  // config
 #include "Serial.h"                 // allChannels
 #include "esp32-hal-tinyusb.h"      // usb_persist_restart
@@ -235,3 +237,5 @@ size_t USBCDCChannel::timedReadBytes(char* buffer, size_t length, TickType_t tim
 
     return length - remlen;
 }
+
+#endif
