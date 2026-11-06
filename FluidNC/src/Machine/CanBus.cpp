@@ -260,16 +260,31 @@ namespace Machine {
         static const uint32_t bauds[] = { 125000, 250000, 500000, 1000000 };
         const uint32_t        target  = _baud;
 
-        can_log_info("CAN: auto-config: target " << target << " baud; probing all driver rates");
-        int expected  = configured_driver_count();
-        int discovered = 0;
+        // This routine must never broadcast a baud-rate or save command.  A
+        // broadcast has no acknowledgement, so one driver that misses the
+        // frame can be left at the wrong rate with its echo disabled.  Probe
+        // at every supported rate, then write each driver at its own address
+        // and verify every write.
+        can_log_info("CAN: auto-config: target " << target << " baud; probing all rates, addressed writes only");
+
+        int expected = configured_driver_count();
         if (expected <= 0) {
-            expected = 1;  // at least one client should be configured; use discovery as fallback
+            expected = 1;  // discovery fallback: at least one driver expected
         }
 
-        // Phase 1: discover which rate each driver uses.  Echo is enabled at
-        // every rate first; a broadcast that is acknowledged proves that at
-        // least one driver is listening at that rate.
+        struct Found {
+            uint8_t  address;
+            uint32_t rate;
+            uint8_t  firmware;
+            uint8_t  hardware;
+        };
+        Found found[Machine::CanBus::MAX_CLIENTS];
+        int   foundCount = 0;
+
+        // Phase 1: discover drivers at all rates and move each one to the
+        // target rate using an addressed 0x68 command.  Echo is enabled at
+        // each address first so a driver that previously had echo disabled
+        // can answer version probes.
         for (uint32_t rate : bauds) {
             _baud = rate;
             if (!install_driver()) {
@@ -277,38 +292,38 @@ namespace Machine {
             }
             _ready = true;
 
-            if (!send_echo_state_forced(true)) {
-                twai_stop();
-                twai_driver_uninstall();
-                _ready = false;
-                continue;
-            }
-            vTaskDelay(pdMS_TO_TICKS(10));
             for (uint8_t address = 1; address <= 8; ++address) {
                 enable_driver_echo_locked(address);
             }
-            flush_receive();
+            vTaskDelay(pdMS_TO_TICKS(5));
 
-            int found = 0;
+            int foundAtRate = 0;
             for (uint8_t address = 1; address <= 8; ++address) {
                 uint8_t firmware = 0;
                 uint8_t hardware = 0;
                 if (probe_address_quiet(address, firmware, hardware, 80, 3)) {
-                    found++;
+                    ++foundAtRate;
+                    if (foundCount < int(sizeof(found) / sizeof(found[0]))) {
+                        found[foundCount++] = { address, rate, firmware, hardware };
+                    }
                     can_log_info("CAN: found address " << int(address) << " at " << rate << " baud (fw V" << int(firmware / 10) << "."
-                                                   << int(firmware % 10) << " hw V" << int(hardware / 10) << "." << int(hardware % 10)
-                                                   << ")");
+                                                   << int(firmware % 10) << " hw V" << int(hardware / 10) << "."
+                                                   << int(hardware % 10) << ")");
                 }
             }
-            discovered += found;
 
-            if (found && rate != target) {
-                uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-                size_t  len = Pd42s1Protocol::build_set_can_baud_command(0, uint16_t(target / 1000), request, sizeof(request));
-                if (len) {
-                    can_log_info("CAN: broadcasting CAN baud " << target << " to " << found << " driver(s) currently at " << rate);
-                    send_message(request, len, 100);
-                    vTaskDelay(pdMS_TO_TICKS(50));
+            if (rate != target && foundAtRate) {
+                for (int i = 0; i < foundCount; ++i) {
+                    if (found[i].rate != rate) {
+                        continue;
+                    }
+                    uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+                    size_t  len = Pd42s1Protocol::build_set_can_baud_command(found[i].address, uint16_t(target / 1000), request, sizeof(request));
+                    if (len) {
+                        can_log_info("CAN: address " << int(found[i].address) << " moving " << rate << " -> " << target << " baud");
+                        send_message(request, len, 100);
+                        vTaskDelay(pdMS_TO_TICKS(20));
+                    }
                 }
             }
 
@@ -317,85 +332,61 @@ namespace Machine {
             _ready = false;
         }
 
-        // Phase 2: install the configured rate, persist the parameters and
-        // verify that the expected number of drivers now answers there.
+        // Phase 2: install the target rate, save each driver individually and
+        // read the saved configuration back to prove the change survived.
         _baud = target;
         if (!install_driver()) {
+            can_log_error("CAN: auto-config: cannot install target rate");
             return false;
         }
         _ready = true;
 
-        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        size_t  len = Pd42s1Protocol::build_save_params_command(0, request, sizeof(request));
-        if (len) {
-            can_log_info("CAN: broadcasting parameter save (0x04) at " << target << " baud");
-            send_message(request, len, 100);
-            vTaskDelay(pdMS_TO_TICKS(30));
-        }
-
-        send_echo_state_forced(true);
-        vTaskDelay(pdMS_TO_TICKS(10));
         for (uint8_t address = 1; address <= 8; ++address) {
             enable_driver_echo_locked(address);
         }
-        flush_receive();
+        _echo_state = true;
+        vTaskDelay(pdMS_TO_TICKS(10));
 
         int confirmed = 0;
+        int savedOk   = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
             uint8_t firmware = 0;
             uint8_t hardware = 0;
-            if (probe_address_quiet(address, firmware, hardware, 100, 3)) {
-                confirmed++;
+            if (!probe_address_quiet(address, firmware, hardware, 100, 3)) {
+                continue;
             }
-        }
-        can_log_info("CAN: auto-config: configured=" << configured_driver_count() << " discovered=" << discovered << " confirmed=" << confirmed
-                                                << " at " << target << " baud");
+            ++confirmed;
 
-        // Persist the setting explicitly per address and read it back (0x32
-        // byte 8..9 contains the saved CAN bit rate).  A broadcast save is not
-        // acknowledged, so this is what proves that the new rate survives a
-        // power cycle.
-        int savedOk = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
             uint8_t  currentEcho = 0;
             uint8_t  currentMode = 0;
             uint16_t currentBaud = 0;
-            if (!read_driver_config(address, currentBaud, currentEcho, currentMode)) {
-                continue;
+            bool     needSave    = true;
+            if (read_driver_config(address, currentBaud, currentEcho, currentMode) && currentBaud == uint16_t(target / 1000)) {
+                // Already saved correctly: avoid unnecessary NVRAM writes.
+                needSave = false;
             }
-            if (currentBaud == uint16_t(target / 1000)) {
-                // Already correct: do not rewrite the driver's NVRAM on every
-                // boot.  Echo/baud were confirmed above.
-                savedOk++;
-                can_log_info("CAN: address " << int(address) << " already saved CAN baud=" << currentBaud << " kbps; skip write");
-                continue;
-            }
-            uint8_t request2[Pd42s1Protocol::MAX_FRAME_LEN];
-            uint8_t response2[64];
-            size_t  len2 = Pd42s1Protocol::build_set_can_baud_command(address, uint16_t(target / 1000), request2, sizeof(request2));
-            for (int attempt = 0; attempt < 2; ++attempt) {
-                size_t responseLen = 0;
-                if (transact(request2, len2, response2, sizeof(response2), responseLen, 100)) {
-                    break;
+
+            if (needSave) {
+                uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+                uint8_t response[64];
+                size_t  len = Pd42s1Protocol::build_save_params_command(address, request, sizeof(request));
+                bool    saved = false;
+                for (int attempt = 0; attempt < 2 && !saved; ++attempt) {
+                    size_t responseLen = 0;
+                    if (len && transact(request, len, response, sizeof(response), responseLen, 100) &&
+                        Pd42s1Protocol::parse_ack(response, responseLen)) {
+                        saved = true;
+                    }
+                }
+                if (!saved) {
+                    can_log_warn("CAN: address " << int(address) << " did not acknowledge parameter save");
                 }
             }
-            len2 = Pd42s1Protocol::build_save_params_command(address, request2, sizeof(request2));
-            bool saved = false;
-            for (int attempt = 0; attempt < 2; ++attempt) {
-                size_t responseLen = 0;
-                if (transact(request2, len2, response2, sizeof(response2), responseLen, 100) &&
-                    Pd42s1Protocol::parse_ack(response2, responseLen)) {
-                    saved = true;
-                    break;
-                }
-            }
-            if (!saved) {
-                can_log_warn("CAN: address " << int(address) << " did not acknowledge parameter save");
-                continue;
-            }
+
             uint16_t savedBaud = 0;
-            if (read_driver_config(address, savedBaud, currentEcho, currentMode) && savedBaud == uint16_t(target / 1000)) {
-                savedOk++;
+            if (read_driver_config(address, savedBaud, currentEcho, currentMode) &&
+                savedBaud == uint16_t(target / 1000)) {
+                ++savedOk;
                 can_log_info("CAN: address " << int(address) << " saved CAN baud=" << savedBaud << " kbps");
             } else {
                 can_log_warn("CAN: address " << int(address) << " saved CAN baud readback=" << savedBaud << " kbps (expected "
@@ -403,17 +394,33 @@ namespace Machine {
             }
         }
 
+        can_log_info("CAN: auto-config: configured=" << configured_driver_count() << " discovered=" << foundCount << " confirmed=" << confirmed
+                                                << " saved=" << savedOk << " at " << target << " baud");
+
+        for (int i = 0; i < foundCount; ++i) {
+            uint8_t firmware = 0;
+            uint8_t hardware = 0;
+            if (found[i].rate != target && !probe_address_quiet(found[i].address, firmware, hardware, 100, 2)) {
+                can_log_warn("CAN: address " << int(found[i].address) << " was found at " << found[i].rate
+                                         << " baud but did not answer at " << target << " baud");
+            }
+        }
+
         if (expected > 0 && (confirmed < expected || savedOk < confirmed)) {
             can_log_warn("CAN: " << (expected - confirmed) << " configured driver(s) did not answer at the configured baud; command echo is left ENABLED");
-            // Do not disable echo when the system is incomplete: motor control
-            // needs acknowledgments and a disabled driver would make it
-            // impossible to recover without a power cycle.
-        } else {
-            // All configured drivers answered and saved the new rate: close
-            // the echo setting as requested.  Motor sync re-enables it before
-            // streaming.
-            disable_all_driver_echo_locked();
+            // Do not disable echo when the system is incomplete: the drivers
+            // must remain reachable for recovery without a power cycle.
+            return true;
         }
+
+        // All configured drivers answered and saved the new rate.  Disable
+        // echo by address rather than broadcast so a missed frame cannot hide
+        // a driver at the wrong setting.
+        for (uint8_t address = 1; address <= 8; ++address) {
+            set_echo_to_address_locked(address, false);
+        }
+        _echo_state = false;
+        can_log_info("CAN: command echo disabled on the drivers after auto-config");
         return true;
     }
 
