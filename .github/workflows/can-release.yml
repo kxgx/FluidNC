@@ -56,37 +56,73 @@ jobs:
           path: ~/.platformio
           key: can-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}
 
-      - name: Build ESP32-S3 CAN firmware
-        run: pio run -e wifi_s3_oled
-
-      - name: Generate addrinfo
+      # Four ESP32-S3 variants:
+      #   wifi_s3_oled             quad PSRAM + OLED   (N16R2 / N8R2 boards)
+      #   wifi_s3_octalPSRAM_oled  octal PSRAM + OLED  (N16R8 / N8R8 boards)
+      #   wifi_s3                  quad PSRAM, no OLED
+      #   wifi_s3_octalPSRAM       octal PSRAM, no OLED
+      - name: Build ESP32-S3 CAN firmware variants
         run: |
-          python tools/stack_trace_decoder/generate_addrinfo.py \
-            .pio/build/wifi_s3_oled/firmware.elf \
-            -o .pio/build/wifi_s3_oled/firmware.addrinfo \
-            --build wifi_s3_oled --verbose
+          set -euxo pipefail
+          pio run -e wifi_s3_oled
+          pio run -e wifi_s3_octalPSRAM_oled
+          pio run -e wifi_s3
+          pio run -e wifi_s3_octalPSRAM
+
+      - name: Generate addrinfo for every variant
+        run: |
+          set -euxo pipefail
+          for env in wifi_s3_oled wifi_s3_octalPSRAM_oled wifi_s3 wifi_s3_octalPSRAM; do
+            python tools/stack_trace_decoder/generate_addrinfo.py \
+              ".pio/build/$env/firmware.elf" \
+              -o ".pio/build/$env/firmware.addrinfo" \
+              --build "$env" --verbose
+          done
 
       - name: Assemble release files
         env:
           TAG: ${{ steps.version.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
         run: |
+          set -euxo pipefail
           mkdir -p release-assets
+
+          # Default variant: quad PSRAM + OLED.  Keep the standard filenames
+          # because FluidCAN Studio and the existing manifest expect them.
           cp .pio/build/wifi_s3_oled/firmware.factory.bin release-assets/
           cp .pio/build/wifi_s3_oled/firmware.bin release-assets/
           cp .pio/build/wifi_s3_oled/bootloader.bin release-assets/
           cp .pio/build/wifi_s3_oled/partitions.bin release-assets/
           cp .pio/build/wifi_s3_oled/firmware.addrinfo release-assets/
+
+          # Additional variants.  Prefix every filename so release assets never
+          # collide and it is obvious which module memory type is required.
+          for pair in \
+            "wifi_s3_octalPSRAM_oled s3-octal-oled" \
+            "wifi_s3 s3-quad" \
+            "wifi_s3_octalPSRAM s3-octal"; do
+            set -- $pair
+            env="$1"
+            label="$2"
+            for file in firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo; do
+              cp ".pio/build/$env/$file" "release-assets/${label}-${file}"
+            done
+          done
+
           python - "$TAG" <<'PY'
           import hashlib, json, os, sys
           tag = sys.argv[1]
           d = "release-assets"
+
+          names = sorted(os.listdir(d))
           def digest(name):
               h = hashlib.sha256()
               with open(os.path.join(d, name), "rb") as f:
                   for chunk in iter(lambda: f.read(1024 * 1024), b""):
                       h.update(chunk)
               return h.hexdigest()
-          def info(name, offset, key):
+          def info(name, offset):
               return {
                   "size": os.path.getsize(os.path.join(d, name)),
                   "offset": offset,
@@ -99,10 +135,10 @@ jobs:
               "source_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/{os.environ['GITHUB_SHA']}",
               "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}",
               "images": {
-                  "fluidcan-factory": info("firmware.factory.bin", "0x0", "factory"),
-                  "fluidcan-app": info("firmware.bin", "0x10000", "app"),
-                  "fluidcan-bootloader": info("bootloader.bin", "0x1000", "bootloader"),
-                  "fluidcan-partitions": info("partitions.bin", "0x8000", "partitions"),
+                  "fluidcan-factory": info("firmware.factory.bin", "0x0"),
+                  "fluidcan-app": info("firmware.bin", "0x10000"),
+                  "fluidcan-bootloader": info("bootloader.bin", "0x1000"),
+                  "fluidcan-partitions": info("partitions.bin", "0x8000"),
               },
               "installable": {
                   "name": "installable",
@@ -110,7 +146,7 @@ jobs:
                   "choice-name": "Processor type",
                   "choices": [{
                       "name": "esp32s3",
-                      "description": "ESP32-S3-WROOM-1",
+                      "description": "ESP32-S3-WROOM-1 (quad PSRAM + OLED)",
                       "choice-name": "安装方式",
                       "choices": [{
                           "name": "can-full",
@@ -123,22 +159,47 @@ jobs:
           }
           with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
               json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+          checksum_files = [
+              "firmware.factory.bin", "firmware.bin", "bootloader.bin", "partitions.bin",
+              "s3-octal-oled-firmware.factory.bin", "s3-octal-oled-firmware.bin",
+              "s3-octal-oled-bootloader.bin", "s3-octal-oled-partitions.bin",
+              "s3-quad-firmware.factory.bin", "s3-quad-firmware.bin",
+              "s3-quad-bootloader.bin", "s3-quad-partitions.bin",
+              "s3-octal-firmware.factory.bin", "s3-octal-firmware.bin",
+              "s3-octal-bootloader.bin", "s3-octal-partitions.bin",
+          ]
           with open(os.path.join(d, "SHA256SUMS"), "w", encoding="utf-8") as f:
-              for name in ["firmware.factory.bin", "firmware.bin", "bootloader.bin", "partitions.bin"]:
+              for name in checksum_files:
                   f.write(f"{digest(name)}  {name}\n")
           PY
-          cd release-assets
-          zip -9 "../fluidcan-${TAG}.zip" *
-          cd ..
-          ls -lh release-assets "fluidcan-${TAG}.zip"
+
+          # Default zip keeps the manifest and is what the desktop installer uses.
+          (cd release-assets && zip -9 "../fluidcan-${TAG}.zip" \
+            firmware.factory.bin firmware.bin bootloader.bin partitions.bin \
+            firmware.addrinfo manifest.json SHA256SUMS)
+
+          # One self-contained zip per additional variant.
+          for pair in \
+            "wifi_s3_octalPSRAM_oled octal-oled" \
+            "wifi_s3 quad" \
+            "wifi_s3_octalPSRAM octal"; do
+            set -- $pair
+            env="$1"
+            label="$2"
+            (cd ".pio/build/$env" && zip -9 "../../../fluidcan-${TAG}-${label}.zip" \
+              firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo)
+          done
+
+          ls -lh release-assets fluidcan-*.zip
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v6
         with:
-          name: fluidcan-wifi-s3-oled-${{ steps.version.outputs.version }}
+          name: fluidcan-wifi-s3-multi-${{ steps.version.outputs.version }}
           path: |
             release-assets/*
-            fluidcan-${{ steps.version.outputs.version }}.zip
+            fluidcan-*.zip
 
       - name: Create GitHub release
         uses: softprops/action-gh-release@v3
@@ -146,21 +207,35 @@ jobs:
           tag_name: ${{ steps.version.outputs.version }}
           name: FluidCAN ${{ steps.version.outputs.version }}
           body: |
-            Automatic CAN firmware build.
+            Automatic CAN firmware build for ESP32-S3.
 
-            Board: ESP32-S3-WROOM-1 / wifi_s3_oled
-            Display: SSD1306 128x64 on i2c0 (SDA GPIO8 / SCL GPIO9, address 0x3C)
+            ## Default firmware
+
+            `wifi_s3_oled` — **Quad PSRAM + OLED**  
+            Suitable for ESP32-S3-WROOM-1-N16R2 / N8R2.
+
+            Files at the top level (`firmware.factory.bin`, `manifest.json`, ...)
+            are this default variant.
+
+            ## Additional variants
+
+            | Variant | PSRAM | OLED | Release files | Zip |
+            |---|---|---|---|---|
+            | `quad-oled` (default) | Quad | Yes | `firmware.*` | `fluidcan-${{ steps.version.outputs.version }}.zip` |
+            | `octal-oled` | Octal | Yes | `s3-octal-oled-*` | `fluidcan-${{ steps.version.outputs.version }}-octal-oled.zip` |
+            | `quad` | Quad | No | `s3-quad-*` | `fluidcan-${{ steps.version.outputs.version }}-quad.zip` |
+            | `octal` | Octal | No | `s3-octal-*` | `fluidcan-${{ steps.version.outputs.version }}-octal.zip` |
+
+            Octal PSRAM is required for ESP32-S3-WROOM-1-N16R8 / N8R8;
+            the quad firmware will not initialize their PSRAM correctly.
+
+            Board: ESP32-S3-WROOM-1  
+            Default display: SSD1306 128x64 on i2c0 (SDA GPIO8 / SCL GPIO9, address 0x3C)  
             Source: `${{ github.sha }}`
-            Installer manifest: `manifest.json`
           files: |
-            release-assets/firmware.factory.bin
-            release-assets/firmware.bin
-            release-assets/bootloader.bin
-            release-assets/partitions.bin
-            release-assets/manifest.json
-            release-assets/SHA256SUMS
-            release-assets/firmware.addrinfo
-            fluidcan-${{ steps.version.outputs.version }}.zip
+            release-assets/*
+            fluidcan-*.zip
           draft: false
           prerelease: false
           make_latest: true
+
