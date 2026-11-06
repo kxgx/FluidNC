@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Version tag, e.g. can-v0.1.0"
+        description: "Version tag, e.g. can-v0.2.0"
         required: true
         type: string
 
@@ -56,23 +56,38 @@ jobs:
           path: ~/.platformio
           key: can-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}
 
-      # Four ESP32-S3 variants:
-      #   wifi_s3_oled             quad PSRAM + OLED   (N16R2 / N8R2 boards)
-      #   wifi_s3_octalPSRAM_oled  octal PSRAM + OLED  (N16R8 / N8R8 boards)
-      #   wifi_s3                  quad PSRAM, no OLED
-      #   wifi_s3_octalPSRAM       octal PSRAM, no OLED
+      # Build matrix:
+      #   quad / octal PSRAM
+      #   OLED / no OLED
+      #   8 MB / 4 MB flash
+      #   USB CDC where needed
       - name: Build ESP32-S3 CAN firmware variants
         run: |
           set -euxo pipefail
-          pio run -e wifi_s3_oled
-          pio run -e wifi_s3_octalPSRAM_oled
-          pio run -e wifi_s3
-          pio run -e wifi_s3_octalPSRAM
+          for env in \
+            wifi_s3_oled \
+            wifi_s3_octalPSRAM_oled \
+            wifi_s3 \
+            wifi_s3_octalPSRAM \
+            wifi_s3_oled_usb \
+            wifi_s3_octalPSRAM_oled_usb \
+            wifi_s3_oled_usb_4mb \
+            wifi_s3_octalPSRAM_oled_usb_4mb; do
+            pio run -e "$env"
+          done
 
       - name: Generate addrinfo for every variant
         run: |
           set -euxo pipefail
-          for env in wifi_s3_oled wifi_s3_octalPSRAM_oled wifi_s3 wifi_s3_octalPSRAM; do
+          for env in \
+            wifi_s3_oled \
+            wifi_s3_octalPSRAM_oled \
+            wifi_s3 \
+            wifi_s3_octalPSRAM \
+            wifi_s3_oled_usb \
+            wifi_s3_octalPSRAM_oled_usb \
+            wifi_s3_oled_usb_4mb \
+            wifi_s3_octalPSRAM_oled_usb_4mb; do
             python tools/stack_trace_decoder/generate_addrinfo.py \
               ".pio/build/$env/firmware.elf" \
               -o ".pio/build/$env/firmware.addrinfo" \
@@ -88,23 +103,23 @@ jobs:
           set -euxo pipefail
           mkdir -p release-assets
 
-          # Default variant: quad PSRAM + OLED.  Keep the standard filenames
-          # because FluidCAN Studio and the existing manifest expect them.
-          cp .pio/build/wifi_s3_oled/firmware.factory.bin release-assets/
-          cp .pio/build/wifi_s3_oled/firmware.bin release-assets/
-          cp .pio/build/wifi_s3_oled/bootloader.bin release-assets/
-          cp .pio/build/wifi_s3_oled/partitions.bin release-assets/
-          cp .pio/build/wifi_s3_oled/firmware.addrinfo release-assets/
+          # Default: existing 8 MB quad-PSRAM OLED board, standard names.
+          for file in firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo; do
+            cp ".pio/build/wifi_s3_oled/$file" "release-assets/$file"
+          done
 
-          # Additional variants.  Prefix every filename so release assets never
-          # collide and it is obvious which module memory type is required.
-          for pair in \
-            "wifi_s3_octalPSRAM_oled s3-octal-oled" \
-            "wifi_s3 s3-quad" \
-            "wifi_s3_octalPSRAM s3-octal"; do
-            set -- $pair
-            env="$1"
-            label="$2"
+          # Everything else is prefixed.  Keep this list in sync with the build list.
+          variants="
+            wifi_s3_octalPSRAM_oled s3-octal-oled
+            wifi_s3 s3-quad
+            wifi_s3_octalPSRAM s3-octal
+            wifi_s3_oled_usb s3-quad-oled-usb
+            wifi_s3_octalPSRAM_oled_usb s3-octal-oled-usb
+            wifi_s3_oled_usb_4mb s3-quad-oled-usb-4mb
+            wifi_s3_octalPSRAM_oled_usb_4mb s3-octal-oled-usb-4mb
+          "
+          echo "$variants" | while read -r env label; do
+            [ -z "$env" ] && continue
             for file in firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo; do
               cp ".pio/build/$env/$file" "release-assets/${label}-${file}"
             done
@@ -115,13 +130,13 @@ jobs:
           tag = sys.argv[1]
           d = "release-assets"
 
-          names = sorted(os.listdir(d))
           def digest(name):
               h = hashlib.sha256()
               with open(os.path.join(d, name), "rb") as f:
                   for chunk in iter(lambda: f.read(1024 * 1024), b""):
                       h.update(chunk)
               return h.hexdigest()
+
           def info(name, offset):
               return {
                   "size": os.path.getsize(os.path.join(d, name)),
@@ -129,6 +144,7 @@ jobs:
                   "path": name,
                   "signature": {"algorithm": "SHA2-256", "value": digest(name)},
               }
+
           manifest = {
               "name": "FluidCAN",
               "version": tag,
@@ -160,33 +176,23 @@ jobs:
           with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
               json.dump(manifest, f, ensure_ascii=False, indent=2)
 
-          checksum_files = [
-              "firmware.factory.bin", "firmware.bin", "bootloader.bin", "partitions.bin",
-              "s3-octal-oled-firmware.factory.bin", "s3-octal-oled-firmware.bin",
-              "s3-octal-oled-bootloader.bin", "s3-octal-oled-partitions.bin",
-              "s3-quad-firmware.factory.bin", "s3-quad-firmware.bin",
-              "s3-quad-bootloader.bin", "s3-quad-partitions.bin",
-              "s3-octal-firmware.factory.bin", "s3-octal-firmware.bin",
-              "s3-octal-bootloader.bin", "s3-octal-partitions.bin",
-          ]
+          checksum_files = sorted(
+              n for n in os.listdir(d)
+              if os.path.isfile(os.path.join(d, n)) and n.endswith((".bin", ".addrinfo"))
+          )
           with open(os.path.join(d, "SHA256SUMS"), "w", encoding="utf-8") as f:
               for name in checksum_files:
                   f.write(f"{digest(name)}  {name}\n")
           PY
 
-          # Default zip keeps the manifest and is what the desktop installer uses.
+          # Default zip keeps the standard manifest for the desktop installer.
           (cd release-assets && zip -9 "../fluidcan-${TAG}.zip" \
             firmware.factory.bin firmware.bin bootloader.bin partitions.bin \
             firmware.addrinfo manifest.json SHA256SUMS)
 
           # One self-contained zip per additional variant.
-          for pair in \
-            "wifi_s3_octalPSRAM_oled octal-oled" \
-            "wifi_s3 quad" \
-            "wifi_s3_octalPSRAM octal"; do
-            set -- $pair
-            env="$1"
-            label="$2"
+          echo "$variants" | while read -r env label; do
+            [ -z "$env" ] && continue
             (cd ".pio/build/$env" && zip -9 "../../../fluidcan-${TAG}-${label}.zip" \
               firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo)
           done
@@ -209,25 +215,27 @@ jobs:
           body: |
             Automatic CAN firmware build for ESP32-S3.
 
-            ## Default firmware
+            ## Default: 8 MB quad PSRAM + OLED
 
-            `wifi_s3_oled` — **Quad PSRAM + OLED**  
-            Suitable for ESP32-S3-WROOM-1-N16R2 / N8R2.
+            Top-level `firmware.factory.bin`, `manifest.json` etc. are the
+            original `wifi_s3_oled` build.
 
-            Files at the top level (`firmware.factory.bin`, `manifest.json`, ...)
-            are this default variant.
+            ## All variants
 
-            ## Additional variants
+            | Env | Flash | PSRAM | OLED | USB | File prefix |
+            |---|---|---|---|---|---|
+            | `wifi_s3_oled` (default) | 8 MB | Quad | Yes | No | — |
+            | `wifi_s3_octalPSRAM_oled` | 8 MB | Octal | Yes | No | `s3-octal-oled-` |
+            | `wifi_s3` | 8 MB | Quad | No | No | `s3-quad-` |
+            | `wifi_s3_octalPSRAM` | 8 MB | Octal | No | No | `s3-octal-` |
+            | `wifi_s3_oled_usb` | 8 MB | Quad | Yes | Yes | `s3-quad-oled-usb-` |
+            | `wifi_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `s3-octal-oled-usb-` |
+            | `wifi_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `s3-quad-oled-usb-4mb-` |
+            | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `s3-octal-oled-usb-4mb-` |
 
-            | Variant | PSRAM | OLED | Release files | Zip |
-            |---|---|---|---|---|
-            | `quad-oled` (default) | Quad | Yes | `firmware.*` | `fluidcan-${{ steps.version.outputs.version }}.zip` |
-            | `octal-oled` | Octal | Yes | `s3-octal-oled-*` | `fluidcan-${{ steps.version.outputs.version }}-octal-oled.zip` |
-            | `quad` | Quad | No | `s3-quad-*` | `fluidcan-${{ steps.version.outputs.version }}-quad.zip` |
-            | `octal` | Octal | No | `s3-octal-*` | `fluidcan-${{ steps.version.outputs.version }}-octal.zip` |
-
-            Octal PSRAM is required for ESP32-S3-WROOM-1-N16R8 / N8R8;
-            the quad firmware will not initialize their PSRAM correctly.
+            The 4 MB variants use a single application slot (no OTA fallback).
+            Do not flash an 8 MB image onto a 4 MB module, and do not use a Quad
+            image on an Octal-PSRAM module.
 
             Board: ESP32-S3-WROOM-1  
             Default display: SSD1306 128x64 on i2c0 (SDA GPIO8 / SCL GPIO9, address 0x3C)  
@@ -238,4 +246,3 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-
