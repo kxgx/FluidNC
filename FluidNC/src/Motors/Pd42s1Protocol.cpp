@@ -33,19 +33,22 @@ namespace MotorDrivers {
 
     size_t Pd42s1Protocol::build_position_command(
         uint8_t address, uint8_t accel, uint16_t speed_rpm, uint32_t position, uint8_t* out, size_t out_size) {
+        // The protocol keeps direction in byte 1 and an unsigned position
+        // magnitude in bytes 5..8.  It is not a two's-complement signed
+        // coordinate: the vendor examples only send positive magnitudes.
+        // Encode negative targets as reverse + magnitude.
+        const int32_t  signedPosition = int32_t(position);
+        const bool     reverse        = signedPosition < 0;
+        const uint32_t magnitude      = reverse ? uint32_t(-int64_t(signedPosition)) : uint32_t(signedPosition);
         uint8_t data[8];
-        // Byte 1 is the rotation direction (0 = forward, 1 = reverse).
-        // Absolute targets are two's-complement int32 position units on the
-        // wire; set the direction byte to match the sign of the target so a
-        // negative move requests reverse even on drivers that honour it.
-        data[0] = int32_t(position) < 0 ? 1 : 0;
+        data[0] = reverse ? 1 : 0;
         data[1] = accel;
         data[2] = uint8_t(speed_rpm >> 8);
         data[3] = uint8_t(speed_rpm & 0xFF);
-        data[4] = uint8_t(position >> 24);
-        data[5] = uint8_t(position >> 16);
-        data[6] = uint8_t(position >> 8);
-        data[7] = uint8_t(position & 0xFF);
+        data[4] = uint8_t(magnitude >> 24);
+        data[5] = uint8_t(magnitude >> 16);
+        data[6] = uint8_t(magnitude >> 8);
+        data[7] = uint8_t(magnitude & 0xFF);
         return build_frame(address, FUNC_POSITION_MODE, data, sizeof(data), out, out_size);
     }
 
