@@ -1,0 +1,312 @@
+name: CAN firmware build and release
+
+on:
+  push:
+    tags:
+      - "can-v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag, e.g. can-v0.2.3"
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - name: Validate version
+        id: version
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="${GITHUB_REF#refs/tags/}"
+          fi
+          if ! [[ "$VERSION" =~ ^can-v[0-9]+\.[0-9]+\.[0-9]+([-.].*)?$ ]]; then
+            echo "::error::Version must look like can-vX.Y.Z, got: $VERSION"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building $VERSION"
+
+  # Each variant is an independent job, so GitHub runs them in parallel.
+  # A failing variant does not delay the others; the release job waits for all.
+  build:
+    needs: prepare
+    runs-on: ubuntu-24.04
+    continue-on-error: false
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - env: wifi_s3_oled
+            label: quad-oled
+            flash: 8MB
+            psram: Quad
+            oled: yes
+            usb: no
+          - env: wifi_s3_octalPSRAM_oled
+            label: octal-oled
+            flash: 8MB
+            psram: Octal
+            oled: yes
+            usb: no
+          - env: wifi_s3
+            label: quad
+            flash: 8MB
+            psram: Quad
+            oled: no
+            usb: no
+          - env: wifi_s3_octalPSRAM
+            label: octal
+            flash: 8MB
+            psram: Octal
+            oled: no
+            usb: no
+          - env: wifi_s3_oled_usb
+            label: quad-oled-usb
+            flash: 8MB
+            psram: Quad
+            oled: yes
+            usb: yes
+          - env: wifi_s3_octalPSRAM_oled_usb
+            label: octal-oled-usb
+            flash: 8MB
+            psram: Octal
+            oled: yes
+            usb: yes
+          - env: wifi_s3_oled_usb_4mb
+            label: quad-oled-usb-4mb
+            flash: 4MB
+            psram: Quad
+            oled: yes
+            usb: yes
+          - env: wifi_s3_octalPSRAM_oled_usb_4mb
+            label: octal-oled-usb-4mb
+            flash: 4MB
+            psram: Octal
+            oled: yes
+            usb: yes
+          - env: wifi_s3_oled_usb_4mb_nopsram
+            label: nopsram-oled-usb-4mb
+            flash: 4MB
+            psram: None
+            oled: yes
+            usb: yes
+    name: build-${{ matrix.env }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v5
+        with:
+          path: ~/.platformio
+          key: can-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}-${{ matrix.env }}
+          restore-keys: |
+            can-pio-${{ runner.os }}-${{ hashFiles('platformio.ini', 'platformio_override.ini') }}-
+            can-pio-${{ runner.os }}-
+
+      - name: Build ${{ matrix.env }}
+        run: pio run -e "${{ matrix.env }}"
+
+      - name: Generate addrinfo
+        run: |
+          python tools/stack_trace_decoder/generate_addrinfo.py \
+            ".pio/build/${{ matrix.env }}/firmware.elf" \
+            -o ".pio/build/${{ matrix.env }}/firmware.addrinfo" \
+            --build "${{ matrix.env }}" \
+            --tag "${{ needs.prepare.outputs.version }}" \
+            --mcu esp32s3 --verbose
+
+      - name: Stage artifacts
+        run: |
+          mkdir -p dist
+          cp ".pio/build/${{ matrix.env }}/firmware.factory.bin" dist/
+          cp ".pio/build/${{ matrix.env }}/firmware.bin" dist/
+          cp ".pio/build/${{ matrix.env }}/bootloader.bin" dist/
+          cp ".pio/build/${{ matrix.env }}/partitions.bin" dist/
+          cp ".pio/build/${{ matrix.env }}/firmware.addrinfo" dist/
+
+      - name: Upload ${{ matrix.label }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: firmware-${{ matrix.label }}
+          path: dist/*
+
+  release:
+    needs: [prepare, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download all variant artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: firmware-*
+          path: artifacts
+          merge-multiple: false
+
+      - name: Assemble release files
+        env:
+          TAG: ${{ needs.prepare.outputs.version }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+        run: |
+          set -euxo pipefail
+          mkdir -p release-assets
+          ls -R artifacts
+
+          # Default: existing 8 MB quad-PSRAM OLED board, standard names.
+          cp artifacts/firmware-quad-oled/* release-assets/
+
+          # Every other variant is prefixed.  Keep labels in sync with the
+          # build matrix above.
+          for label in octal-oled quad octal quad-oled-usb octal-oled-usb quad-oled-usb-4mb octal-oled-usb-4mb nopsram-oled-usb-4mb; do
+            for file in firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo; do
+              cp "artifacts/firmware-${label}/${file}" "release-assets/${label}-${file}"
+            done
+          done
+
+          python - "$TAG" <<'PY'
+          import hashlib, json, os, sys
+          tag = sys.argv[1]
+          d = "release-assets"
+
+          def digest(name):
+              h = hashlib.sha256()
+              with open(os.path.join(d, name), "rb") as f:
+                  for chunk in iter(lambda: f.read(1024 * 1024), b""):
+                      h.update(chunk)
+              return h.hexdigest()
+
+          def info(name, offset):
+              return {
+                  "size": os.path.getsize(os.path.join(d, name)),
+                  "offset": offset,
+                  "path": name,
+                  "signature": {"algorithm": "SHA2-256", "value": digest(name)},
+              }
+
+          manifest = {
+              "name": "FluidCAN",
+              "version": tag,
+              "source_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/tree/{os.environ['GITHUB_SHA']}",
+              "release_url": f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/tag/{tag}",
+              "images": {
+                  "fluidcan-factory": info("firmware.factory.bin", "0x0"),
+                  "fluidcan-app": info("firmware.bin", "0x10000"),
+                  "fluidcan-bootloader": info("bootloader.bin", "0x1000"),
+                  "fluidcan-partitions": info("partitions.bin", "0x8000"),
+              },
+              "installable": {
+                  "name": "installable",
+                  "description": "FluidCAN CAN firmware",
+                  "choice-name": "Processor type",
+                  "choices": [{
+                      "name": "esp32s3",
+                      "description": "ESP32-S3-WROOM-1 (quad PSRAM + OLED)",
+                      "choice-name": "安装方式",
+                      "choices": [{
+                          "name": "can-full",
+                          "description": "完整写入 CAN 固件（factory image @ 0x0）",
+                          "erase": True,
+                          "images": ["fluidcan-factory"],
+                      }],
+                  }],
+              },
+          }
+          with open(os.path.join(d, "manifest.json"), "w", encoding="utf-8") as f:
+              json.dump(manifest, f, ensure_ascii=False, indent=2)
+
+          checksum_files = sorted(
+              n for n in os.listdir(d)
+              if os.path.isfile(os.path.join(d, n)) and n.endswith((".bin", ".addrinfo"))
+          )
+          with open(os.path.join(d, "SHA256SUMS"), "w", encoding="utf-8") as f:
+              for name in checksum_files:
+                  f.write(f"{digest(name)}  {name}\n")
+          PY
+
+          (cd release-assets && zip -9 "../fluidcan-${TAG}.zip" \
+            firmware.factory.bin firmware.bin bootloader.bin partitions.bin \
+            firmware.addrinfo manifest.json SHA256SUMS)
+
+          for label in octal-oled quad octal quad-oled-usb octal-oled-usb quad-oled-usb-4mb octal-oled-usb-4mb nopsram-oled-usb-4mb; do
+            (cd "artifacts/firmware-${label}" && zip -9 "../../fluidcan-${TAG}-${label}.zip" \
+              firmware.factory.bin firmware.bin bootloader.bin partitions.bin firmware.addrinfo)
+          done
+
+          ls -lh release-assets fluidcan-*.zip
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: fluidcan-wifi-s3-multi-${{ needs.prepare.outputs.version }}
+          path: |
+            release-assets/*
+            fluidcan-*.zip
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ needs.prepare.outputs.version }}
+          name: FluidCAN ${{ needs.prepare.outputs.version }}
+          body: |
+            Automatic CAN firmware build for ESP32-S3, one parallel job per variant.
+
+            ## Default: 8 MB quad PSRAM + OLED
+
+            Top-level `firmware.factory.bin`, `manifest.json` etc. are the
+            original `wifi_s3_oled` build.
+
+            ## All variants
+
+            | Env | Flash | PSRAM | OLED | USB | File prefix / zip |
+            |---|---|---|---|---|---|
+            | `wifi_s3_oled` (default) | 8 MB | Quad | Yes | No | — / `fluidcan-<tag>.zip` |
+            | `wifi_s3_octalPSRAM_oled` | 8 MB | Octal | Yes | No | `octal-oled-` |
+            | `wifi_s3` | 8 MB | Quad | No | No | `quad-` |
+            | `wifi_s3_octalPSRAM` | 8 MB | Octal | No | No | `octal-` |
+            | `wifi_s3_oled_usb` | 8 MB | Quad | Yes | Yes | `quad-oled-usb-` |
+            | `wifi_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `octal-oled-usb-` |
+            | `wifi_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `quad-oled-usb-4mb-` |
+            | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `octal-oled-usb-4mb-` |
+            | `wifi_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `nopsram-oled-usb-4mb-` |
+
+            The 4 MB variants use a single application slot (no OTA fallback).
+            Do not flash an 8 MB image onto a 4 MB module, and do not use a Quad
+            image on an Octal-PSRAM module.
+
+            Board: ESP32-S3-WROOM-1  
+            Default display: SSD1306 128x64 on i2c0 (SDA GPIO8 / SCL GPIO9, address 0x3C)  
+            Source: `${{ github.sha }}`
+          files: |
+            release-assets/*
+            fluidcan-*.zip
+          draft: false
+          prerelease: false
+          make_latest: true
+
