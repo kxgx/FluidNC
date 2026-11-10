@@ -89,6 +89,7 @@ void Stepping::assignMotorDriver(axis_t axis, motor_t motor, MotorDrivers::Motor
     auto m                   = new motor_pins_t {};
     axis_motors[axis][motor] = m;
     m->driver                = driver;
+    driver->set_axis(axis);
     // Resolved here, with the flash cache enabled, so that step() need not read
     // the driver's vtable out of flash while running as an interrupt handler.
     m->step_fn = driver->isr_step_fn();
@@ -211,7 +212,11 @@ void IRAM_ATTR Stepping::unstep() {
     _engine->finish_unstep();
 }
 
-void Stepping::reset() {}
+void Stepping::reset() {
+    for (axis_t axis = X_AXIS; axis < MAX_N_AXIS; ++axis) {
+        axis_steps[axis] = 0;
+    }
+}
 void Stepping::beginLowLatency() {}
 void Stepping::endLowLatency() {}
 

@@ -790,6 +790,7 @@ static void protocol_start_holding() {
         sys.step_control = {};
         Stepper::update_plan_block_parameters();
         sys.step_control.executeHold = true;  // Initiate suspend state with active flag.
+        Axes::stop_motion();
     }
 }
 
@@ -798,6 +799,7 @@ static void protocol_cancel_jogging() {
         sys.step_control = {};
         Stepper::update_plan_block_parameters();
         sys.step_control.executeHold = true;  // Initiate suspend state with active flag.
+        Axes::stop_motion();
         auto suspend                 = sys.suspend();
         suspend.bit.jogCancel        = true;
         sys.set_suspend(suspend);
@@ -1144,6 +1146,7 @@ void protocol_do_cycle_stop() {
                 }
                 sys.step_control.executeHold      = false;
                 sys.step_control.executeSysMotion = false;
+                Axes::resume_motion();
                 break;
             }
             // Fall through

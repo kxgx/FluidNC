@@ -22,6 +22,12 @@
 using namespace Machine;
 
 namespace MotorDrivers {
+    // Absolute targets are sent as a 32-bit signed coordinate.  Keep a wide
+    // margin below INT32_MIN/MAX; the actual travel is far inside this range.
+    // Crossing this boundary would otherwise turn a large positive target into
+    // a negative direction request (or vice versa).
+    static constexpr int32_t TARGET_SAFE_LIMIT = 1000000000;
+
     // Static registry for sync_group batching.  Configuration is loaded before
     // the CAN worker starts, so no lock is needed here.
     std::vector<Pd42s1Motor*> Pd42s1Motor::_instances;
@@ -236,7 +242,7 @@ namespace MotorDrivers {
         // the driver base position but the hardware step counter keeps
         // counting.  Subtracting the counter value captured at the last sync
         // keeps the target continuous across resyncs.
-        int64_t steps  = int64_t(_stepCount) - int64_t(_baseStepCount);
+        int64_t steps  = int64_t(Stepping::getSteps(_axis)) - int64_t(_baseStepCount);
         double  scaled = double(steps) * double(_countsPerStep);
         if (_invertDirection) {
             scaled = -scaled;
@@ -245,6 +251,11 @@ namespace MotorDrivers {
         // The driver position wraps at 2^32; truncating the sum to uint32_t
         // implements that wrap without signed-overflow undefined behavior.
         return uint32_t(uint64_t(int64_t(_basePosition) + delta));
+    }
+
+    bool Pd42s1Motor::target_is_safe(uint32_t target) const {
+        const int32_t signedTarget = int32_t(target);
+        return signedTarget >= -TARGET_SAFE_LIMIT && signedTarget <= TARGET_SAFE_LIMIT;
     }
 
     bool Pd42s1Motor::transact(
@@ -368,6 +379,44 @@ namespace MotorDrivers {
         return true;
     }
 
+    bool Pd42s1Motor::resync_position_base() {
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+        int32_t position    = 0;
+
+        size_t len = Pd42s1Protocol::build_read_command(
+            uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+        if (!transact_retry(request, len, response, sizeof(response), responseLen,
+                           TRANSACTION_TIMEOUT_MS, 2) ||
+            !Pd42s1Protocol::parse_position(response, responseLen, position)) {
+            _readFailures++;
+            return false;
+        }
+
+        const bool hadBlockTarget = _blockTargetValid;
+        _basePosition     = uint32_t(position);
+        _baseStepCount    = Stepping::getSteps(_axis);
+        _lastTarget       = _basePosition;
+        _driverPosition   = position;
+        _targetDirty      = true;
+        _everSynced       = true;
+        if (hadBlockTarget && _blockTargets) {
+            int64_t deltaSteps = int64_t(_blockTargetSteps) - int64_t(_blockBaseStepCount);
+            double  scaled     = double(deltaSteps) * double(_countsPerStep);
+            if (_invertDirection) {
+                scaled = -scaled;
+            }
+            _blockTarget      = uint32_t(uint64_t(int64_t(_basePosition) + int64_t(llround(scaled))));
+            _blockTargetValid = true;
+            _targetDirty      = true;
+        } else {
+            _blockTargetValid = false;
+        }
+        can_log_info("CAN: " << name() << " base resynced to " << position);
+        return true;
+    }
+
     bool Pd42s1Motor::sync() {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -426,10 +475,11 @@ namespace MotorDrivers {
         const uint32_t continuityTarget = _everSynced ? target_position() : 0;
 
         _basePosition     = _everSynced ? continuityTarget : uint32_t(position);
-        _baseStepCount    = _stepCount;
+        _baseStepCount    = Stepping::getSteps(_axis);
         _lastTarget       = _basePosition;
         _driverPosition   = position;
         _targetDirty      = true;
+        _blockTargetValid = false;
         _disabled         = false;
         _disablePending   = false;
         _disableRequested = false;
@@ -511,8 +561,10 @@ namespace MotorDrivers {
             _online         = true;
             _writeFailures  = 0;
             if (!disable) {
-                // Re-send the target after enabling so the driver is not left
-                // holding a stale target from before it was disabled.
+                // Do not resync on every enable: the planner step engine can
+                // already be moving when a delayed enable arrives, and changing
+                // baseStepCount mid-block makes the target jump to the current
+                // position.  The initial sync at boot establishes the base.
                 _targetDirty = true;
             }
             can_log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
@@ -529,6 +581,10 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Motor::send_target(uint32_t target, uint32_t timeoutMs) {
+        if (!target_is_safe(target)) {
+            report_driver_fault("absolute target outside safe 32-bit range");
+            return false;
+        }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  responseLen = 0;
@@ -621,6 +677,10 @@ namespace MotorDrivers {
     // wire in one uninterrupted batch instead of letting a status query or
     // another motor interleave between Y0 and Y1.
     bool Pd42s1Motor::send_target_nowait_locked(uint32_t target) {
+        if (!target_is_safe(target)) {
+            report_driver_fault("absolute target outside safe 32-bit range");
+            return false;
+        }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  len = Pd42s1Protocol::build_position_command(
             uint8_t(_address), uint8_t(_accel), uint16_t(_speedRpm), target, request, sizeof(request));
@@ -640,6 +700,136 @@ namespace MotorDrivers {
             return false;
         }
         _lastTarget   = target;
+        _targetDirty  = false;
+        _online       = true;
+        _writeFailures = 0;
+        return true;
+    }
+
+    void Pd42s1Motor::stop_motion() {
+        if (!_blockTargets || !_synced || !_blockTargetValid) {
+            return;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_stop_now_command(uint8_t(_address), request, sizeof(request));
+        if (!len) {
+            return;
+        }
+        {
+            Machine::CanBus::Lock lock(*_bus);
+            _bus->send_message(request, len, TRANSACTION_TIMEOUT_MS);
+            _bus->flush_receive();
+        }
+        _targetDirty = false;
+        warn_throttled(now_ms(), "feed hold: driver stop sent");
+    }
+
+    void Pd42s1Motor::resume_motion() {
+        if (_blockTargets && _blockTargetValid) {
+            _targetDirty = true;
+            warn_throttled(now_ms(), "feed hold: driver target resend armed");
+        }
+    }
+
+    void Pd42s1Motor::on_position_zeroed() {
+        // The driver's encoder is now 0, but the cached base and step count
+        // belong to the old coordinate system.  Force a fresh sync before
+        // accepting another absolute target.
+        _synced      = false;
+        _everSynced  = false;
+        _online      = false;
+        _lastTarget       = 0;
+        _targetDirty      = true;
+        _blockTargetValid = false;
+    }
+
+    void Pd42s1Motor::set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) {
+        if (!_blockTargets) {
+            return;
+        }
+        auto axisConfig = Machine::Axes::_axis[axis];
+        if (!axisConfig || axisConfig->_stepsPerMm <= 0.0f) {
+            return;
+        }
+        const double countsPerMm = double(_countsPerStep) * double(axisConfig->_stepsPerMm);
+        if (countsPerMm <= 0.0) {
+            return;
+        }
+
+        int64_t deltaSteps = int64_t(targetSteps) - int64_t(_baseStepCount);
+        double  scaled     = double(deltaSteps) * double(_countsPerStep);
+        if (_invertDirection) {
+            scaled = -scaled;
+        }
+        const int64_t delta = int64_t(llround(scaled));
+        _blockTarget        = uint32_t(uint64_t(int64_t(_basePosition) + delta));
+        _blockTargetSteps   = targetSteps;
+        _blockBaseStepCount = _baseStepCount;
+
+        // 51200 position units per revolution.  feedMmMin is mm/min and
+        // accelMmSec2 is mm/s^2; convert both to the driver's RPM units.
+        double speedRpm = double(feedMmMin) * countsPerMm / 51200.0;
+        double accelRpm = double(accelMmSec2) * countsPerMm / 51200.0;
+        if (speedRpm < 1.0) {
+            speedRpm = 1.0;
+        }
+        if (speedRpm > double(_speedRpm)) {
+            speedRpm = double(_speedRpm);
+        }
+        if (speedRpm > 6000.0) {
+            speedRpm = 6000.0;
+        }
+        if (accelRpm < 1.0) {
+            accelRpm = 1.0;
+        }
+        if (accelRpm > double(_accel)) {
+            accelRpm = double(_accel);
+        }
+        if (accelRpm > 200.0) {
+            accelRpm = 200.0;
+        }
+
+        _blockSpeedRpm    = uint16_t(speedRpm);
+        _blockAccel       = uint8_t(accelRpm);
+        _blockTargetValid = true;
+        _targetDirty      = true;
+        can_log_info("CAN: block target axis " << int(axis) << " steps " << targetSteps << " baseStep " << _baseStepCount
+                                                << " basePos " << int32_t(_basePosition) << " target " << int32_t(_blockTarget)
+                                                << " speed " << _blockSpeedRpm << " accel " << int(_blockAccel));
+    }
+
+    bool Pd42s1Motor::send_block_target_nowait() {
+        if (!_blockTargetValid || !target_is_safe(_blockTarget)) {
+            return false;
+        }
+        // A repeated identical block target must not be re-sent.  The driver
+        // already owns that absolute target; sending it again after a planner
+        // re-prep would otherwise execute the same move twice on some paths.
+        if (_lastTarget == _blockTarget) {
+            _targetDirty = false;
+            return true;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[16];
+        size_t  responseLen = 0;
+        size_t  len = Pd42s1Protocol::build_position_command(
+            uint8_t(_address), _blockAccel, _blockSpeedRpm, _blockTarget, request, sizeof(request));
+        // Use an acknowledged transaction, exactly like the successful
+        // single-target diagnostic.  In group mode the responding member of
+        // the group supplies the acknowledge; the silent member still executes.
+        if (!len || !transact(request, len, response, sizeof(response), responseLen, 150) ||
+            !Pd42s1Protocol::parse_ack(response, responseLen)) {
+            _targetDirty = true;
+            _writeFailures++;
+            if (_writeFailures >= 3) {
+                _writeFailures = 0;
+                _synced        = false;
+                report_driver_fault("block target write failed");
+            }
+            return false;
+        }
+        can_log_info("CAN: sent block target " << int32_t(_blockTarget));
+        _lastTarget   = _blockTarget;
         _targetDirty  = false;
         _online       = true;
         _writeFailures = 0;
@@ -675,7 +865,11 @@ namespace MotorDrivers {
         }
 
         if (!_disabled) {
-            if (_syncGroup == 0) {
+            if (_blockTargets) {
+                if (_targetDirty && _blockTargetValid) {
+                    send_block_target_nowait();
+                }
+            } else if (_syncGroup == 0) {
                 // Normal independent target streaming.
                 if (int32_t(nowMs - _nextUpdateMs) >= 0) {
                     _nextUpdateMs += _updateMs;

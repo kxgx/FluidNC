@@ -30,6 +30,7 @@ struct plan_block_t {
     // NOTE: Used by stepper algorithm to execute the block correctly. Do not alter these values.
 
     uint32_t steps[MAX_N_AXIS];  // Step count along each axis
+    int32_t  target_steps[MAX_N_AXIS];  // Absolute step position at the end of this block
     uint32_t step_event_count;   // The maximum step axis count and number of steps required to complete this block.
     AxisMask direction_bits;     // The direction bit set for this block (refers to *_DIRECTION_BIT in config.h)
 

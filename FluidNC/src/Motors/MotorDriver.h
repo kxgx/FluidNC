@@ -68,6 +68,22 @@ namespace MotorDrivers {
         // override it to retune themselves.  Default is a no-op.
         virtual void set_homing_phase(bool fastApproach) {}
 
+        // Called once when the axis driver is registered.  Closed-loop drivers
+        // that need the planner step coordinate use this axis index.
+        virtual void set_axis(axis_t axis) {}
+
+        // One planner block was loaded.  targetSteps is the absolute step
+        // position at the end of that block, feedMmMin and accelMmSec2 are
+        // the planner rate and acceleration.  Closed-loop drivers that let
+        // the driver perform its own trapezoid use this once per block.
+        virtual void set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) {}
+
+        // Feed hold support for drivers that execute a final target on their
+        // own.  stop_motion brakes the axis; resume_motion re-sends the held
+        // target once the planner resumes.
+        virtual void stop_motion() {}
+        virtual void resume_motion() {}
+
         // this is used to determine if the motor can home
         // it is tested when hoing cycles are requested.
         virtual bool can_self_home() = 0;

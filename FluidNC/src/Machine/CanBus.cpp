@@ -142,6 +142,20 @@ namespace Machine {
         // Only change this if the drivers were reprogrammed with command ID
         // 0x6C.
         handler.item("command_id", _command_id);
+
+        // @config group_member_address
+        // @default 0
+        // @tuning per-machine
+        // Optional slave address of a driver that should be switched to
+        // group-address mode at boot.  0 disables the feature.
+        handler.item("group_member_address", _groupMemberAddress, 0, 255);
+
+        // @config group_member_group
+        // @default 0
+        // @tuning per-machine
+        // Group address for group_member_address.  Both fields must be
+        // non-zero and different to enable the feature.
+        handler.item("group_member_group", _groupMemberGroup, 0, 255);
     }
 
     void CanBus::validate() {
@@ -154,6 +168,10 @@ namespace Machine {
                "CAN baud must be 125000, 250000, 500000 or 1000000");
         Assert(_command_id <= 0x1FFFFFFF, "CAN command_id must fit in 29 bits");
         Assert((_command_id & 0xFFFFFFF0u) == 0x1000u, "CAN command_id must be in 0x1000..0x100F for PD42S1");
+        Assert((_groupMemberAddress == 0) == (_groupMemberGroup == 0),
+               "CAN group_member_address and group_member_group must both be set or both be 0");
+        Assert(_groupMemberAddress == 0 || _groupMemberAddress != _groupMemberGroup,
+               "CAN group_member_address must differ from group_member_group");
     }
 
     void CanBus::init() {
@@ -180,6 +198,7 @@ namespace Machine {
             return;
         }
         _ready = true;
+        apply_configured_group();
         start_worker();
         can_log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
     }
@@ -256,6 +275,54 @@ namespace Machine {
         can_log_info("CAN: command echo disabled on the drivers after auto-config");
     }
 
+    // Switch one driver to a new bit rate and prove it answers there.  A
+    // single fire-and-forget 0x68 frame is not sufficient: if that frame is
+    // lost the driver stays at the old rate while the controller moves on,
+    // which leaves a mixed-rate bus that is hard to recover.  Retry by going
+    // back to the known-old rate, re-sending the switch, and probing again.
+    bool CanBus::switch_driver_baud_retry(uint8_t address, uint32_t oldBaud, uint32_t newBaud) {
+        if (oldBaud == newBaud) {
+            uint8_t firmware = 0;
+            uint8_t hardware = 0;
+            return probe_address_quiet(address, firmware, hardware, 150, 3);
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_set_can_baud_command(address, uint16_t(newBaud / 1000), request, sizeof(request));
+        if (!len) {
+            return false;
+        }
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            twai_stop();
+            twai_driver_uninstall();
+            _ready = false;
+            _baud  = oldBaud;
+            if (!install_driver()) {
+                return false;
+            }
+            _ready = true;
+            send_message(request, len, 100);
+            vTaskDelay(pdMS_TO_TICKS(40));
+
+            twai_stop();
+            twai_driver_uninstall();
+            _ready = false;
+            _baud  = newBaud;
+            if (!install_driver()) {
+                return false;
+            }
+            _ready = true;
+            uint8_t firmware = 0;
+            uint8_t hardware = 0;
+            if (probe_address_quiet(address, firmware, hardware, 150, 3)) {
+                log_info("CAN: address " << int(address) << " verified at " << newBaud << " baud after retry " << attempt + 1);
+                return true;
+            }
+            log_info("CAN: address " << int(address) << " did not answer at " << newBaud << " baud, retry " << attempt + 1);
+            vTaskDelay(pdMS_TO_TICKS(20));
+        }
+        return false;
+    }
+
     bool CanBus::auto_configure_drivers() {
         static const uint32_t bauds[] = { 125000, 250000, 500000, 1000000 };
         const uint32_t        target  = _baud;
@@ -265,6 +332,7 @@ namespace Machine {
         // frame can be left at the wrong rate with its echo disabled.  Probe
         // at every supported rate, then write each driver at its own address
         // and verify every write.
+        log_info("CAN auto-config: target " << target << " baud; probing all rates");
         can_log_info("CAN: auto-config: target " << target << " baud; probing all rates, addressed writes only");
 
         int expected = configured_driver_count();
@@ -321,6 +389,10 @@ namespace Machine {
                     size_t  len = Pd42s1Protocol::build_set_can_baud_command(found[i].address, uint16_t(target / 1000), request, sizeof(request));
                     if (len) {
                         can_log_info("CAN: address " << int(found[i].address) << " moving " << rate << " -> " << target << " baud");
+                        // A driver changes its bit rate as soon as it accepts
+                        // this frame.  Sending it twice would put the second
+                        // frame on the old rate after the driver has already
+                        // switched, so only send once.
                         send_message(request, len, 100);
                         vTaskDelay(pdMS_TO_TICKS(20));
                     }
@@ -349,12 +421,30 @@ namespace Machine {
 
         int confirmed = 0;
         int savedOk   = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
+        bool verified[9] = { false };
+        // Verify exactly the IDs that phase 1 discovered, not an arbitrary
+        // address range.  A recorded ID may have appeared at more than one
+        // probe rate, so process each address once.
+        for (int foundIndex = 0; foundIndex < foundCount; ++foundIndex) {
+            const uint8_t address = found[foundIndex].address;
+            bool          already = false;
+            for (int j = 0; j < foundIndex; ++j) {
+                if (found[j].address == address) {
+                    already = true;
+                    break;
+                }
+            }
+            if (already) {
+                continue;
+            }
+
             uint8_t firmware = 0;
             uint8_t hardware = 0;
             if (!probe_address_quiet(address, firmware, hardware, 100, 3)) {
+                can_log_warn("CAN: recorded address " << int(address) << " did not answer at the target rate");
                 continue;
             }
+            verified[address] = true;
             ++confirmed;
 
             uint8_t  currentEcho = 0;
@@ -394,6 +484,48 @@ namespace Machine {
             }
         }
 
+        // Phase 3: any driver that was discovered but did not answer at the
+        // target rate gets a bounded retry from its recorded old rate.
+        for (int i = 0; i < foundCount; ++i) {
+            const uint8_t address = found[i].address;
+            if (address < 1 || address > 8 || verified[address]) {
+                continue;
+            }
+            if (found[i].rate == target) {
+                continue;
+            }
+            log_info("CAN auto-config: retrying address " << int(address) << " from " << found[i].rate << " to " << target);
+            if (!switch_driver_baud_retry(address, found[i].rate, target)) {
+                log_warn("CAN auto-config: address " << int(address) << " did not switch to " << target << " baud");
+                continue;
+            }
+            verified[address] = true;
+            ++confirmed;
+
+            uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+            uint8_t response[64];
+            size_t  len = Pd42s1Protocol::build_save_params_command(address, request, sizeof(request));
+            bool    saved = false;
+            for (int attempt = 0; attempt < 2 && !saved; ++attempt) {
+                size_t responseLen = 0;
+                if (len && transact(request, len, response, sizeof(response), responseLen, 100) &&
+                    Pd42s1Protocol::parse_ack(response, responseLen)) {
+                    saved = true;
+                }
+            }
+            uint8_t  echo = 0;
+            uint8_t  mode = 0;
+            uint16_t savedBaud = 0;
+            if (read_driver_config(address, savedBaud, echo, mode) && savedBaud == uint16_t(target / 1000)) {
+                ++savedOk;
+                log_info("CAN auto-config: address " << int(address) << " saved CAN baud=" << savedBaud << " kbps");
+            } else {
+                log_warn("CAN auto-config: address " << int(address) << " saved baud readback mismatch");
+            }
+        }
+
+        log_info("CAN auto-config: configured=" << configured_driver_count() << " discovered=" << foundCount << " confirmed=" << confirmed
+                                                << " saved=" << savedOk << " at " << target << " baud");
         can_log_info("CAN: auto-config: configured=" << configured_driver_count() << " discovered=" << foundCount << " confirmed=" << confirmed
                                                 << " saved=" << savedOk << " at " << target << " baud");
 
@@ -407,10 +539,12 @@ namespace Machine {
         }
 
         if (expected > 0 && (confirmed < expected || savedOk < confirmed)) {
+            log_warn("CAN auto-config incomplete: expected " << expected << " confirmed " << confirmed << " saved " << savedOk
+                                                          << "; CAN control worker will stay stopped for safety");
             can_log_warn("CAN: " << (expected - confirmed) << " configured driver(s) did not answer at the configured baud; command echo is left ENABLED");
             // Do not disable echo when the system is incomplete: the drivers
             // must remain reachable for recovery without a power cycle.
-            return true;
+            return false;
         }
 
         // All configured drivers answered and saved the new rate.  Disable
@@ -433,16 +567,17 @@ namespace Machine {
         suspend();
         bool ok = auto_configure_drivers();
         if (!ok) {
-            _baud = target;
-            if (!install_driver()) {
-                can_log_error("CAN: auto-config failed and the bus could not be restored");
-                return false;
-            }
-            _ready = true;
+            log_error("CAN auto-config failed or incomplete; CAN motor worker is not started");
+            can_log_error("CAN: auto-config failed; worker not started");
+            _ready = true;  // serial diagnostics may still use the installed bus
+            return false;
         }
+        _ready = true;
+        apply_configured_group();
         start_worker();
+        log_info("CAN auto-config finished OK");
         can_log_info("CAN: auto-config finished");
-        return ok;
+        return true;
     }
 
     void CanBus::start_worker() {
@@ -1290,6 +1425,170 @@ namespace Machine {
         if (!found) {
             log_info("CAN positions: (no devices)");
         }
+    }
+
+    bool CanBus::set_driver_enable(uint8_t address, bool enable) {
+        if (!_ready) {
+            return false;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[16];
+        size_t  responseLen = 0;
+        size_t  len         = Pd42s1Protocol::build_enable_command(address, enable, request, sizeof(request));
+        if (!len) {
+            return false;
+        }
+        Lock lock(*this);
+        bool ok = transact(request, len, response, sizeof(response), responseLen, 150) &&
+                  Pd42s1Protocol::parse_ack(response, responseLen);
+        can_log_info("CAN: " << (enable ? "enable" : "disable") << " address " << int(address) << (ok ? " ok" : " failed"));
+        return ok;
+    }
+
+    bool CanBus::apply_configured_group() {
+        if (_groupMemberAddress == 0 || _groupMemberGroup == 0) {
+            return true;
+        }
+        if (!_ready) {
+            return false;
+        }
+        uint8_t firmware = 0;
+        uint8_t hardware = 0;
+        bool    present  = false;
+        {
+            Lock lock(*this);
+            present = probe_address_quiet(_groupMemberAddress, firmware, hardware, 100, 2);
+        }
+        if (!present) {
+            can_log_info("CAN: group member address " << int(_groupMemberAddress)
+                                                     << " not present; assumed already grouped as "
+                                                     << int(_groupMemberGroup));
+            return true;
+        }
+        can_log_info("CAN: applying group member address " << int(_groupMemberAddress) << " -> group "
+                                                           << int(_groupMemberGroup));
+        return set_group_address(_groupMemberAddress, _groupMemberGroup);
+    }
+
+    bool CanBus::set_group_address(uint8_t address, uint8_t group) {
+        if (!_ready || group == 0 || address == group) {
+            return false;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[16];
+        size_t  responseLen = 0;
+
+        {
+            Lock lock(*this);
+            size_t len = Pd42s1Protocol::build_set_group_address_command(address, group, request, sizeof(request));
+            if (!len || !send_message(request, len, 150)) {
+                can_log_error("CAN: setting group address on address " << int(address) << " failed");
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+
+            // Some drivers do not echo the 0x61 set command.  Success is
+            // proven by the old slave address no longer replying.
+            uint8_t firmware = 0;
+            uint8_t hardware = 0;
+            if (probe_address_quiet(address, firmware, hardware, 80, 2)) {
+                can_log_error("CAN: address " << int(address) << " still answers at the old address after group switch");
+                return false;
+            }
+
+            // The driver now listens only on the group address, so save the
+            // parameter through the group.  The normal slave member of the
+            // group answers and the group-only member executes silently.
+            len = Pd42s1Protocol::build_save_params_command(group, request, sizeof(request));
+            if (!len || !transact(request, len, response, sizeof(response), responseLen, 200) ||
+                !Pd42s1Protocol::parse_ack(response, responseLen)) {
+                can_log_error("CAN: group address " << int(group) << " set, but save failed");
+                return false;
+            }
+        }
+
+        can_log_info("CAN: address " << int(address) << " is now group member " << int(group));
+        return true;
+    }
+
+    bool CanBus::read_driver_position(uint8_t address, int32_t& position) {
+        if (!_ready) {
+            return false;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[16];
+        size_t  responseLen = 0;
+        size_t  len         = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+        if (!len) {
+            return false;
+        }
+        Lock lock(*this);
+        return transact(request, len, response, sizeof(response), responseLen, 150) &&
+               Pd42s1Protocol::parse_position(response, responseLen, position);
+    }
+
+    bool CanBus::send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel) {
+        if (!_ready) {
+            return false;
+        }
+        int32_t current = 0;
+        if (!read_driver_position(address, current)) {
+            can_log_error("CAN move: cannot read position at address " << int(address));
+            return false;
+        }
+        const int32_t target = current + delta;
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[16];
+        size_t  responseLen = 0;
+        size_t  len = Pd42s1Protocol::build_position_command(address, accel, speed_rpm, uint32_t(target), request, sizeof(request));
+        if (!len) {
+            return false;
+        }
+        Lock lock(*this);
+        bool ok = transact(request, len, response, sizeof(response), responseLen, 300) &&
+                  Pd42s1Protocol::parse_ack(response, responseLen);
+        can_log_info("CAN move: address " << int(address) << " from " << current << " to " << target
+                                           << " (delta " << delta << ") " << (ok ? "ok" : "failed"));
+        return ok;
+    }
+
+    bool CanBus::zero_driver_position(uint8_t address) {
+        if (!_ready) {
+            return false;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  len = Pd42s1Protocol::build_zero_position_command(address, request, sizeof(request));
+        if (!len) {
+            return false;
+        }
+
+        bool ok = false;
+        {
+            Lock lock(*this);
+            for (int attempt = 0; attempt < 3 && !ok; ++attempt) {
+                uint8_t response[16];
+                size_t  responseLen = 0;
+                if (transact(request, len, response, sizeof(response), responseLen, 150) &&
+                    Pd42s1Protocol::parse_ack(response, responseLen)) {
+                    ok = true;
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(20));
+                }
+            }
+        }
+
+        if (ok) {
+            // Both cached targets and bases are stale after a driver zero.
+            // Notify every client at this address; two configured motors can
+            // share one address.
+            for (size_t i = 0; i < _n_clients; ++i) {
+                if (_clients[i] && _clients[i]->bus_address() == address) {
+                    _clients[i]->on_position_zeroed();
+                }
+            }
+        }
+        can_log_info("CAN: zero position at address " << int(address) << (ok ? " ok" : " failed"));
+        return ok;
     }
 
     void CanBus::stop_all_drivers() {

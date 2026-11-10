@@ -41,6 +41,11 @@ namespace MotorDrivers {
         // CanBusClient override -- called from the CAN worker task.
         void    can_poll(uint32_t now_ms) override;
         uint8_t bus_address() const override { return uint8_t(_address); }
+        void    on_position_zeroed() override;
+        void    set_axis(axis_t axis) override { _axis = axis; }
+        void    set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) override;
+        void    stop_motion() override;
+        void    resume_motion() override;
 
         // Step ISR entry points.  These are non-virtual and IRAM_ATTR for the
         // same reason as UnipolarMotor's: the linker puts virtual function
@@ -123,6 +128,13 @@ namespace MotorDrivers {
             // for diagnostics.  Set to 0 to disable readbacks.
             handler.item("status_poll_ms", _statusPollMs, 0, 60000);
 
+            // @config block_targets
+            // @default false
+            // @tuning per-machine
+            // Send one final target per planner block and let the driver run
+            // its own trapezoid instead of streaming a target every update_ms.
+            handler.item("block_targets", _blockTargets);
+
             // @config max_torque_ma
             // @default -1
             // @tuning per-machine
@@ -153,6 +165,7 @@ namespace MotorDrivers {
 
     private:
         bool sync();
+        bool resync_position_base();
         bool transact(
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
         bool transact_retry(
@@ -162,6 +175,7 @@ namespace MotorDrivers {
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         bool     send_target_nowait(uint32_t target);
         bool     send_target_nowait_locked(uint32_t target);
+        bool     send_block_target_nowait();
         void     apply_driver_tuning();
         void     register_instance();
         void     unregister_instance();
@@ -170,6 +184,7 @@ namespace MotorDrivers {
         void     report_driver_fault(const char* reason);
         void     poll_position();
         uint32_t target_position() const;
+        bool     target_is_safe(uint32_t target) const;
         void     warn_throttled(uint32_t nowMs, const char* message);
 
         Machine::CanBus* _bus = nullptr;
@@ -184,6 +199,14 @@ namespace MotorDrivers {
         uint32_t _updateMs        = 20;
         uint32_t _statusPollMs    = 1000;
         int32_t  _maxTorqueMa     = -1;
+        bool     _blockTargets    = false;
+        axis_t   _axis            = X_AXIS;
+        bool     _blockTargetValid = false;
+        uint32_t _blockTarget      = 0;
+        int32_t  _blockTargetSteps = 0;
+        int32_t  _blockBaseStepCount = 0;
+        uint16_t _blockSpeedRpm   = 0;
+        uint8_t  _blockAccel      = 0;
         int32_t  _positionPidP    = -1;
         int32_t  _positionPidI    = -1;
         int32_t  _positionPidD    = -1;

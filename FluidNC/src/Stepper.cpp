@@ -15,6 +15,7 @@
 #include "StepperPrivate.h"
 #include "Planner.h"
 #include "Protocol.h"
+#include "Motors/MotorDriver.h"
 #include <cmath>
 
 using namespace Stepper;
@@ -413,6 +414,18 @@ void Stepper::prep_buffer() {
                 st_prep_block                 = &st_block_buffer[prep.st_block_index];
                 st_prep_block->direction_bits = pl_block->direction_bits;
                 auto n_axis                   = Axes::_numberAxis;
+
+                // Convert this planner block into one final target for
+                // closed-loop drivers that perform their own trapezoid.
+                for (axis_t axis = X_AXIS; axis < n_axis; axis++) {
+                    const int32_t target_steps = pl_block->target_steps[axis];
+                    for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
+                        auto m = config->_axes->_axis[axis]->_motors[motor];
+                        if (m && m->_driver) {
+                            m->_driver->set_block_target(axis, target_steps, pl_block->programmed_rate, pl_block->acceleration / 3600.0f);
+                        }
+                    }
+                }
 
                 // Bit-shift multiply all Bresenham data by the max AMASS level so that
                 // we never divide beyond the original data anywhere in the algorithm.

@@ -1307,6 +1307,130 @@ static Error can_reset(const char* value, AuthenticationLevel auth_level, Channe
     return Error::Ok;
 }
 
+static Error can_enable(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN enable: no can: section configured");
+        return Error::Ok;
+    }
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        log_info("CAN enable: only allowed while Idle or Alarm");
+        return Error::InvalidValue;
+    }
+    if (!value || !*value) {
+        log_info("CAN enable: usage $CANEnable=address");
+        return Error::InvalidValue;
+    }
+    char*      end = nullptr;
+    const long address = strtol(value, &end, 10);
+    if (end == value || *end != '\0' || address < 1 || address > 255) {
+        log_info("CAN enable: invalid address");
+        return Error::InvalidValue;
+    }
+    config->_can->set_driver_enable(uint8_t(address), true);
+    return Error::Ok;
+}
+
+static Error can_move(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN move: no can: section configured");
+        return Error::Ok;
+    }
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        log_info("CAN move: only allowed while Idle or Alarm");
+        return Error::InvalidValue;
+    }
+    if (!value || !*value) {
+        log_info("CAN move: usage $CANMove=address,delta_counts");
+        return Error::InvalidValue;
+    }
+    char*      end = nullptr;
+    const long address = strtol(value, &end, 10);
+    if (end == value || *end != ',') {
+        log_info("CAN move: usage $CANMove=address,delta_counts");
+        return Error::InvalidValue;
+    }
+    const char* second = end + 1;
+    const long  delta  = strtol(second, &end, 10);
+    if (end == second || *end != '\0' || address < 1 || address > 255 || delta == 0) {
+        log_info("CAN move: invalid address/delta");
+        return Error::InvalidValue;
+    }
+    config->_can->send_single_position(uint8_t(address), int32_t(delta), 100, 50);
+    return Error::Ok;
+}
+
+static Error can_group(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN group: no can: section configured");
+        return Error::Ok;
+    }
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        log_info("CAN group: only allowed while Idle or Alarm");
+        return Error::InvalidValue;
+    }
+    if (!value || !*value) {
+        log_info("CAN group: usage $CANGroup=slave_address,group_address");
+        return Error::InvalidValue;
+    }
+    char*       end   = nullptr;
+    const long  slave = strtol(value, &end, 10);
+    if (end == value || *end != ',') {
+        log_info("CAN group: usage $CANGroup=slave_address,group_address");
+        return Error::InvalidValue;
+    }
+    const char* second = end + 1;
+    const long  group  = strtol(second, &end, 10);
+    if (end == second || *end != '\0' || slave < 1 || slave > 255 || group < 1 || group > 255 || slave == group) {
+        log_info("CAN group: invalid slave/group address");
+        return Error::InvalidValue;
+    }
+    if (!config->_can->set_group_address(uint8_t(slave), uint8_t(group))) {
+        log_info("CAN group: failed");
+        return Error::Ok;
+    }
+    log_info("CAN group: address " << slave << " now group " << group);
+    return Error::Ok;
+}
+
+static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel& out) {
+    if (!config->_can) {
+        log_info("CAN zero: no can: section configured");
+        return Error::Ok;
+    }
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        log_info("CAN zero: only allowed while Idle or Alarm");
+        return Error::InvalidValue;
+    }
+    int addresses[8] = { 1, 2, 3, 4 };
+    int count         = 4;
+    if (value && *value) {
+        count = 0;
+        const char* p = value;
+        while (*p && count < int(sizeof(addresses) / sizeof(addresses[0]))) {
+            char*       end = nullptr;
+            const long  a   = strtol(p, &end, 10);
+            if (end == p || a < 1 || a > 255) {
+                log_info("CAN zero: invalid address list");
+                return Error::InvalidValue;
+            }
+            addresses[count++] = int(a);
+            p = end;
+            while (*p == ',' || *p == ' ') {
+                ++p;
+            }
+        }
+    }
+    int succeeded = 0;
+    for (int i = 0; i < count; ++i) {
+        if (config->_can->zero_driver_position(uint8_t(addresses[i]))) {
+            ++succeeded;
+        }
+        delay_ms(20);
+    }
+    log_info("CAN zero: acknowledged " << succeeded << "/" << count << " address(es)");
+    return Error::Ok;
+}
+
 static Error can_faults(const char* value, AuthenticationLevel auth_level, Channel& out) {
     if (!config->_can) {
         log_info("CAN faults: no can: section configured");
@@ -1497,6 +1621,10 @@ void make_user_commands() {
     new ReportCommand("CANStatus", "System/CANStatus", can_status, anyState);
     new ReportCommand("CANClear", "System/CANClear", can_clear, anyState);
     new ReportCommand("CANReset", "System/CANReset", can_reset, anyState);
+    new ReportCommand("CANZero", "System/CANZero", can_zero, anyState);
+    new ReportCommand("CANGroup", "System/CANGroup", can_group, anyState);
+    new ReportCommand("CANMove", "System/CANMove", can_move, anyState);
+    new ReportCommand("CANEnable", "System/CANEnable", can_enable, anyState);
     new ReportCommand("CANFaults", "System/CANFaults", can_faults, anyState);
     new ReportCommand("CANPos", "System/CANPos", can_pos, anyState);
     new ReportCommand("CANStop", "System/CANStop", can_stop, anyState);

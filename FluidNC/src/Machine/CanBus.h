@@ -42,6 +42,11 @@ namespace Machine {
         // clients that do not use a PD42S1-style address.
         virtual uint8_t bus_address() const { return 0; }
 
+        // The driver's encoder position was zeroed by a maintenance command.
+        // The client must resynchronise its cached base position before it can
+        // send another absolute target.
+        virtual void on_position_zeroed() {}
+
         virtual ~CanBusClient() = default;
     };
 
@@ -163,6 +168,34 @@ namespace Machine {
         // Broadcasts the immediate-brake command (0xFC) to all drivers.
         void stop_all_drivers();
 
+    // Read one driver's current encoder position.
+    bool read_driver_position(uint8_t address, int32_t& position);
+
+    // Send one final 0xF2 absolute target to one driver and wait for its
+    // acknowledge.  This bypasses the planner and is for diagnostics only.
+    bool send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel);
+
+    // Send 0xF8 to one driver: zero its current encoder position.
+    bool zero_driver_position(uint8_t address);
+
+    // Enable or disable one driver (0xFA).  In group mode the silent members
+    // still execute the addressed command.
+    bool set_driver_enable(uint8_t address, bool enable);
+
+    // Apply the optional persistent group member from config.yaml
+    // (group_member_address -> group_member_group).  Safe to call after the
+    // bus is ready; a member already in group mode is skipped.
+    bool apply_configured_group();
+
+    // Switch one driver to group-address mode (0x61), then save the parameter
+    // (0x04) through the group address so the group member receives it
+    // silently while the responding member acknowledges.  After this call the
+    // old slave address no longer answers for that driver.
+    bool set_group_address(uint8_t address, uint8_t group);
+
+    // Read-only status for display/diagnostics.
+    uint32_t baud() const { return _baud; }
+
         // Sends one read command and prints the raw response bytes.  Useful
         // for exploring function codes that do not have a dedicated command.
         void read_raw(uint8_t address, uint8_t function);
@@ -212,6 +245,7 @@ namespace Machine {
         bool        test_transceiver();
         void        enable_echoes_at_startup();
         bool        auto_configure_drivers();
+        bool        switch_driver_baud_retry(uint8_t address, uint32_t oldBaud, uint32_t newBaud);
         bool        probe_address_quiet(uint8_t address, uint8_t& firmware, uint8_t& hardware, uint32_t timeout_ms, int attempts);
         bool        read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode);
         void        set_echo_to_address_locked(uint8_t address, bool enable);
@@ -232,6 +266,8 @@ namespace Machine {
         Pin      _rx;
         uint32_t _baud       = 500000;
         uint32_t _command_id = 0x1000;
+        uint8_t  _groupMemberAddress = 0;
+        uint8_t  _groupMemberGroup   = 0;
 
         static bool _driver_configured;
         static int  _driver_count;

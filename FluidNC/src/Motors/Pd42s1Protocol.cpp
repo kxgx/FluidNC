@@ -66,6 +66,10 @@ namespace MotorDrivers {
         return build_frame(address, FUNC_CLEAR_STALL, nullptr, 0, out, out_size);
     }
 
+    size_t Pd42s1Protocol::build_zero_position_command(uint8_t address, uint8_t* out, size_t out_size) {
+        return build_frame(address, FUNC_ZERO_POSITION, nullptr, 0, out, out_size);
+    }
+
     size_t Pd42s1Protocol::build_stop_now_command(uint8_t address, uint8_t* out, size_t out_size) {
         return build_frame(address, FUNC_STOP_NOW, nullptr, 0, out, out_size);
     }
@@ -83,6 +87,11 @@ namespace MotorDrivers {
     size_t Pd42s1Protocol::build_set_max_torque_command(uint8_t address, uint16_t milliamps, uint8_t* out, size_t out_size) {
         uint8_t data[2] = { uint8_t(milliamps >> 8), uint8_t(milliamps & 0xFF) };
         return build_frame(address, FUNC_SET_MAX_TORQUE, data, sizeof(data), out, out_size);
+    }
+
+    size_t Pd42s1Protocol::build_set_group_address_command(uint8_t address, uint8_t group, uint8_t* out, size_t out_size) {
+        uint8_t data[1] = { group };
+        return build_frame(address, FUNC_SET_GROUP_ADDRESS, data, sizeof(data), out, out_size);
     }
 
     size_t Pd42s1Protocol::build_set_can_baud_command(uint8_t address, uint16_t kbps, uint8_t* out, size_t out_size) {
@@ -135,9 +144,12 @@ namespace MotorDrivers {
                 return 7;  // status + 1-byte enable state
             case FUNC_SET_ECHO:
                 return 7;  // status + 1-byte echo state
+            case FUNC_SET_GROUP_ADDRESS:
+                return 7;  // status + 1-byte group address
             case FUNC_CLEAR_STALL:
             case FUNC_CLEAR_STATE:
             case FUNC_STOP_NOW:
+            case FUNC_ZERO_POSITION:
             case FUNC_SAVE_PARAMS:
                 return 6;  // status only
             case FUNC_SET_CAN_BAUD:

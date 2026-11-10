@@ -53,12 +53,14 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_SAVE_PARAMS      = 0x04;  // save parameters to NVRAM
         static constexpr uint8_t FUNC_SET_POSITION_PID = 0x63;  // position-loop PID
         static constexpr uint8_t FUNC_SET_MAX_TORQUE   = 0x64;  // position-loop current limit, mA
+        static constexpr uint8_t FUNC_SET_GROUP_ADDRESS = 0x61;  // switch driver to group-address mode
         static constexpr uint8_t FUNC_SET_CAN_BAUD     = 0x68;  // new CAN bit rate in kbps
         static constexpr uint8_t FUNC_SET_ECHO         = 0x6F;
         static constexpr uint8_t FUNC_CLEAR_STALL      = 0xF9;  // clear stall protection
         static constexpr uint8_t FUNC_SET_MOTOR_ENABLE = 0xFA;
         static constexpr uint8_t FUNC_CLEAR_STATE      = 0xFB;  // clear stall/brake/disabled state
         static constexpr uint8_t FUNC_STOP_NOW         = 0xFC;  // brake immediately
+        static constexpr uint8_t FUNC_ZERO_POSITION    = 0xF8;  // zero current position
         static constexpr uint8_t FUNC_POSITION_MODE    = 0xF2;
 
         static constexpr size_t MAX_FRAME_LEN = 32;
@@ -87,6 +89,9 @@ namespace MotorDrivers {
         // where only the stall latch needs clearing.
         static size_t build_clear_stall_command(uint8_t address, uint8_t* out, size_t out_size);
 
+        // Builds the zero-current-position command (0xF8).
+        static size_t build_zero_position_command(uint8_t address, uint8_t* out, size_t out_size);
+
         // Builds the immediate-brake command (0xFC).  The manual warns that
         // the motor can get hot if the state is not cleared afterwards.
         static size_t build_stop_now_command(uint8_t address, uint8_t* out, size_t out_size);
@@ -97,6 +102,10 @@ namespace MotorDrivers {
 
         // Builds the position-loop maximum torque/current command (0x64), mA.
         static size_t build_set_max_torque_command(uint8_t address, uint16_t milliamps, uint8_t* out, size_t out_size);
+
+        // Builds the group-address command (0x61).  Once a driver accepts
+        // this, it answers only to the group address and no longer responds.
+        static size_t build_set_group_address_command(uint8_t address, uint8_t group, uint8_t* out, size_t out_size);
 
         // Builds the CAN bit-rate command (0x68, value in kbps, e.g. 1000).
         static size_t build_set_can_baud_command(uint8_t address, uint16_t kbps, uint8_t* out, size_t out_size);

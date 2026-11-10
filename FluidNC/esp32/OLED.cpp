@@ -2,6 +2,7 @@
 #include "string_util.h"
 
 #include "Machine/MachineConfig.h"
+#include "Machine/CanBus.h"
 
 void OLED::show(Layout& layout, const char* msg) {
     if (_width < layout._width_required) {
@@ -22,6 +23,7 @@ OLED::Layout OLED::percentLayout64  = { 64, 0, 64, ArialMT_Plain_16, TEXT_ALIGN_
 OLED::Layout OLED::limitLabelLayout = { 80, 14, 128, ArialMT_Plain_10, TEXT_ALIGN_LEFT };
 OLED::Layout OLED::posLabelLayout   = { 60, 14, 128, ArialMT_Plain_10, TEXT_ALIGN_RIGHT };
 OLED::Layout OLED::radioAddrLayout  = { 50, 0, 128, ArialMT_Plain_10, TEXT_ALIGN_LEFT };
+OLED::Layout OLED::canLayout        = { 0, 54, 128, ArialMT_Plain_10, TEXT_ALIGN_LEFT };
 
 void OLED::afterParse() {
     if (!config->_i2c[_i2c_num]) {
@@ -196,6 +198,26 @@ void OLED::show_radio_info() {
     }
 }
 
+void OLED::show_can_status() {
+#if MAX_N_CAN
+    if (_width != 128 || _height != 64) {
+        return;
+    }
+    if (_state == "Run" || _filename.length() != 0) {
+        return;
+    }
+    if (!config || !config->_can) {
+        return;
+    }
+    char msg[24];
+    snprintf(msg, sizeof(msg), "CAN %luk", (unsigned long)(config->_can->baud() / 1000));
+    if (!config->_can->ready()) {
+        strncat(msg, " !", sizeof(msg) - strlen(msg) - 1);
+    }
+    show(canLayout, msg);
+#endif
+}
+
 void OLED::parse_numbers(std::string s, float* nums, uint8_t maxnums) {
     size_t pos     = 0;
     size_t nextpos = -1;
@@ -359,6 +381,7 @@ void OLED::parse_status_report() {
     show_limits(probe, limits);
     show_dro(axes, isMpos, limits);
     show_radio_info();
+    show_can_status();
     _oled->display();
 }
 

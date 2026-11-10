@@ -71,6 +71,28 @@ namespace Machine {
         config_motors();
     }
 
+    void Axes::stop_motion() {
+        for (axis_t axis = X_AXIS; axis < _numberAxis; ++axis) {
+            for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
+                auto m = _axis[axis]->_motors[motor];
+                if (m && m->_driver) {
+                    m->_driver->stop_motion();
+                }
+            }
+        }
+    }
+
+    void Axes::resume_motion() {
+        for (axis_t axis = X_AXIS; axis < _numberAxis; ++axis) {
+            for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
+                auto m = _axis[axis]->_motors[motor];
+                if (m && m->_driver) {
+                    m->_driver->resume_motion();
+                }
+            }
+        }
+    }
+
     void IRAM_ATTR Axes::set_disable(axis_t axis, bool disable, bool manual_override) {
         if (disable && !manual_override && !_axis[axis]->_idleDisable) {  //skip if idle disable is not allowed for this axis
             return;

@@ -330,6 +330,7 @@ bool plan_buffer_line(float* target, plan_line_data_t* pl_data) {
         // Also, compute individual axes distance for move and prep unit vector calculations.
         // NOTE: Computes true distance from converted step values.
         target_steps[axis]      = motor_pos_to_steps(target[axis], axis);
+        block->target_steps[axis] = target_steps[axis];
         block->steps[axis]      = labs(target_steps[axis] - position_steps[axis]);
         block->step_event_count = MAX(block->step_event_count, block->steps[axis]);
         float delta_mm          = steps_to_motor_pos((target_steps[axis] - position_steps[axis]), axis);
