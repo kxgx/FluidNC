@@ -1661,26 +1661,45 @@ namespace Machine {
         char funcText[8];
         snprintf(funcText, sizeof(funcText), "0x%02X", int(function));
 
-        flush_receive();
-        if (!send_message(request, len, 150)) {
-            log_warn("CAN read: address " << int(address) << " function " << funcText << ": transmit failed");
-            return;
-        }
-
         // Deliberately not using transact(): this diagnostic should show the
         // raw bytes even when the response length is not modelled yet.
-        size_t   total    = 0;
-        uint32_t deadline = now_ms() + 300;
-        while (total < sizeof(response)) {
-            int32_t left = int32_t(deadline - now_ms());
-            if (left <= 0) {
+        size_t total = 0;
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            total = 0;
+            flush_receive();
+            if (!send_message(request, len, 150)) {
+                log_warn("CAN read: address " << int(address) << " function " << funcText << ": transmit failed");
+                return;
+            }
+
+            uint32_t deadline = now_ms() + 300;
+            while (total < sizeof(response)) {
+                int32_t left = int32_t(deadline - now_ms());
+                if (left <= 0) {
+                    break;
+                }
+                // Give the first frame the whole remaining timeout.  The old
+                // code capped every receive at 50 ms and broke on the first
+                // timeout, so a driver reply that arrived after 50 ms was
+                // reported as "no response" even though the transaction
+                // timeout was 300 ms.  After the first frame, only wait for
+                // the next frame of a multi-frame answer.
+                uint32_t wait = total ? (left > 10 ? 10 : uint32_t(left)) : uint32_t(left);
+                size_t   received = receive_chunk(response + total, sizeof(response) - total, wait);
+                if (received == 0) {
+                    if (total == 0) {
+                        continue;  // keep waiting for the first frame until deadline
+                    }
+                    break;  // end of a multi-frame answer
+                }
+                total += received;
+            }
+            if (total) {
                 break;
             }
-            size_t received = receive_chunk(response + total, sizeof(response) - total, left > 50 ? 50 : uint32_t(left));
-            if (received == 0) {
-                break;
+            if (attempt < 2) {
+                vTaskDelay(pdMS_TO_TICKS(5));
             }
-            total += received;
         }
         flush_receive();
 
