@@ -1220,15 +1220,25 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
             // "Reverse" wiring probe: run the same two scans on a second,
             // otherwise-unused I2C controller with SDA and SCL exchanged, so
             // the already-configured bus 0 is not disturbed.
-            auto sda = sdaNum;
-            auto scl = sclNum;
+            //
+            // Do not do this when bus 1 is configured: on this machine bus 1
+            // carries the PCA9545A, and re-initialising its controller here
+            // both reports the wrong bus/pin association and can disturb the
+            // active downstream bus.
+            I2CBus* other = config->_i2c[1];
+            if (other && other->_sda.defined() && other->_scl.defined()) {
+                log_info("I2C0 swapped probe skipped: I2C1 is configured");
+            } else {
+                auto sda = sdaNum;
+                auto scl = sclNum;
 
-            log_info("I2C0 scan (SDA/SCL swapped) on bus 1 SDA:" << i2c->_scl.name() << " SCL:" << i2c->_sda.name());
-            i2c_master_init(1, scl, sda, i2c->_frequency);
-            log_info(" forward:");
-            scan_i2c_range(1, false);
-            log_info(" reverse:");
-            scan_i2c_range(1, true);
+                log_info("I2C0 scan (SDA/SCL swapped) on bus 1 SDA:" << i2c->_scl.name() << " SCL:" << i2c->_sda.name());
+                i2c_master_init(1, scl, sda, i2c->_frequency);
+                log_info(" forward:");
+                scan_i2c_range(1, false);
+                log_info(" reverse:");
+                scan_i2c_range(1, true);
+            }
         }
 #    endif
 #if defined(ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
