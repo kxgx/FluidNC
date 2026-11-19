@@ -1652,6 +1652,11 @@ namespace Machine {
             log_info("CAN read: bus not ready");
             return;
         }
+        struct DiagnosticGuard {
+            std::atomic<bool>& flag;
+            ~DiagnosticGuard() { flag.store(false, std::memory_order_release); }
+        } guard{ _diagnostic_active };
+        _diagnostic_active.store(true, std::memory_order_release);
         Lock lock(*this);
 
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1684,7 +1689,7 @@ namespace Machine {
                 // reported as "no response" even though the transaction
                 // timeout was 300 ms.  After the first frame, only wait for
                 // the next frame of a multi-frame answer.
-                uint32_t wait = total ? (left > 10 ? 10 : uint32_t(left)) : uint32_t(left);
+                uint32_t wait = total ? (left > 2 ? 2 : uint32_t(left)) : uint32_t(left);
                 size_t   received = receive_chunk(response + total, sizeof(response) - total, wait);
                 if (received == 0) {
                     if (total == 0) {
@@ -1693,12 +1698,18 @@ namespace Machine {
                     break;  // end of a multi-frame answer
                 }
                 total += received;
+                // Stop as soon as the protocol-reported length is complete;
+                // only unmodelled function codes need to wait for silence.
+                size_t expected = Pd42s1Protocol::expected_response_length(response, total);
+                if (expected != 0 && total >= expected) {
+                    break;
+                }
             }
             if (total) {
                 break;
             }
             if (attempt < 2) {
-                vTaskDelay(pdMS_TO_TICKS(5));
+                vTaskDelay(pdMS_TO_TICKS(2));
             }
         }
         flush_receive();

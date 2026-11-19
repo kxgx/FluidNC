@@ -912,7 +912,7 @@ namespace MotorDrivers {
             // own target here; the leader sends it in the same batch.
         }
 
-        if (_statusPollMs && int32_t(nowMs - _nextStatusMs) >= 0) {
+        if (_statusPollMs && !_bus->diagnostic_active() && int32_t(nowMs - _nextStatusMs) >= 0) {
             _nextStatusMs = nowMs + _statusPollMs;
             poll_position();
         }

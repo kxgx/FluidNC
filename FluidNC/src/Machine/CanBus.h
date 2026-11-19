@@ -23,6 +23,7 @@
 #    include "Configuration/Configurable.h"
 #    include "Pin.h"
 
+#    include <atomic>
 #    include <cstddef>
 #    include <cstdint>
 #    include <freertos/FreeRTOS.h>
@@ -75,6 +76,11 @@ namespace Machine {
 
         bool configured() const { return _tx.defined() && _rx.defined(); }
         bool ready() const { return _ready; }
+
+        // A foreground diagnostic read is in progress.  The CAN worker should
+        // avoid starting a new background status poll so the foreground
+        // command does not wait for a poll transaction.
+        bool diagnostic_active() const { return _diagnostic_active.load(std::memory_order_acquire); }
 
         // True when at least one PD42S1 CAN motor driver was configured.  The
         // bus, worker and all $CAN.../M15x commands are gated on this so a
@@ -283,6 +289,7 @@ namespace Machine {
         static bool _logging_enabled;
 
         bool              _ready          = false;
+        std::atomic<bool> _diagnostic_active{ false };
         SemaphoreHandle_t _bus_mutex      = nullptr;
         SemaphoreHandle_t _list_mutex     = nullptr;
         TaskHandle_t      _task_handle    = nullptr;
