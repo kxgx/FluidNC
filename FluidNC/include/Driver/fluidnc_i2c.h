@@ -8,5 +8,6 @@
 // I2C interface
 
 bool i2c_master_init(objnum_t bus_number, pinnum_t sda_pin, pinnum_t scl_pin, uint32_t frequency);
+bool i2c_master_deinit(objnum_t bus_number);
 int  i2c_write(objnum_t bus_number, uint8_t address, const uint8_t* data, size_t count);
 int  i2c_read(objnum_t bus_number, uint8_t address, uint8_t* data, size_t count);

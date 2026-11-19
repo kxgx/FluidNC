@@ -281,7 +281,7 @@ namespace Machine {
         uint8_t addresses[MAX_CLIENTS];
         size_t  count = configured_addresses(addresses, MAX_CLIENTS);
         if (!count) {
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[count++] = uint8_t(i + 1);
             }
         }
@@ -371,7 +371,7 @@ namespace Machine {
         size_t  addressCount = configured_addresses(addresses, Machine::CanBus::MAX_CLIENTS);
         if (!addressCount) {
             // Discovery fallback when no PD42S1 client was configured.
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[addressCount++] = uint8_t(i + 1);
             }
         }
@@ -605,6 +605,14 @@ namespace Machine {
         }
         _ready = true;
         _stop_latched = false;
+        // Runtime reconfiguration closes command echo and may have reset the
+        // driver parameter state.  Force every client through a fresh sync so
+        // it cannot keep using an old position base.
+        for (size_t i = 0; i < _n_clients; ++i) {
+            if (_clients[i]) {
+                _clients[i]->on_position_zeroed();
+            }
+        }
         apply_configured_group();
         start_worker();
         log_info("CAN auto-config finished OK");
@@ -1073,7 +1081,7 @@ namespace Machine {
         uint8_t addresses[MAX_CLIENTS];
         size_t  count = configured_addresses(addresses, MAX_CLIENTS);
         if (!count) {
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[count++] = uint8_t(i + 1);
             }
         }
@@ -1124,7 +1132,7 @@ namespace Machine {
         uint8_t addresses[MAX_CLIENTS];
         size_t  count = configured_addresses(addresses, MAX_CLIENTS);
         if (!count) {
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[count++] = uint8_t(i + 1);
             }
         }
@@ -1361,7 +1369,7 @@ namespace Machine {
         uint8_t addresses[MAX_CLIENTS];
         size_t  count = configured_addresses(addresses, MAX_CLIENTS);
         if (!count) {
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[count++] = uint8_t(i + 1);
             }
         }
@@ -1593,7 +1601,7 @@ namespace Machine {
     }
 
     bool CanBus::set_driver_enable(uint8_t address, bool enable) {
-        if (!_ready || (_stop_latched && enable)) {
+        if (!_ready || _inhibited || (_stop_latched && enable)) {
             return false;
         }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1636,7 +1644,7 @@ namespace Machine {
     }
 
     bool CanBus::set_group_address(uint8_t address, uint8_t group) {
-        if (!_ready || _stop_latched || group == 0 || address == group) {
+        if (!_ready || _stop_latched || _inhibited || group == 0 || address == group) {
             return false;
         }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1693,7 +1701,7 @@ namespace Machine {
     }
 
     bool CanBus::send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel) {
-        if (!_ready || _stop_latched) {
+        if (!_ready || _stop_latched || _inhibited) {
             return false;
         }
         int32_t current = 0;
@@ -1812,7 +1820,7 @@ namespace Machine {
         uint8_t addresses[MAX_CLIENTS];
         size_t  count = configured_addresses(addresses, MAX_CLIENTS);
         if (!count) {
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[count++] = uint8_t(i + 1);
             }
         }
@@ -1971,7 +1979,7 @@ namespace Machine {
         uint8_t addresses[MAX_CLIENTS];
         size_t  count = configured_addresses(addresses, MAX_CLIENTS);
         if (!count) {
-            for (size_t i = 0; i < 8; ++i) {
+            for (size_t i = 0; i < MAX_CLIENTS; ++i) {
                 addresses[count++] = uint8_t(i + 1);
             }
         }

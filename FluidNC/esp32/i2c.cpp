@@ -41,6 +41,11 @@ bool i2c_master_init(objnum_t bus_number, pinnum_t sda_pin, pinnum_t scl_pin, ui
     return false;
 }
 
+bool i2c_master_deinit(objnum_t bus_number) {
+    i2c_driver_delete((i2c_port_t)bus_number);
+    return false;
+}
+
 // cppcheck-suppress unusedFunction
 int i2c_write(objnum_t bus_number, uint8_t address, const uint8_t* data, size_t count) {
 #    if 0

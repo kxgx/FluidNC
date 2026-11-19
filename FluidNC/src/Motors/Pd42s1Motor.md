@@ -199,22 +199,22 @@ position within about 0.01 mm.
    mode (or through 10k..100k for slope control).
 6. Diagnostics:
    * `$CANScan` -- transceiver D/R loopback test, TWAI state/error counters,
-     then version reads at addresses 1..8 at the configured bit rate (extended
+     then version reads at configured addresses 1..16 at the configured bit rate (extended
      frames, accept-all filter, no 0x6F traffic).  Each address is probed up to
      three times (`after retry` in the log).  The reported
      `TWAI tx_err before -> after` tells whether any node ACKed the frames:
      `0 -> 0` means a powered node is present, an increase means nobody ACKed
      (check power, CANH/CANL wiring and bit rate).
    * `$CANScan=all` -- recovery variant: at each rate it first sends
-     `0x6F = 0` (broadcast and every address 1..8), then scans 125k, 250k,
+     `0x6F = 0` (broadcast and every configured address 1..16), then scans 125k, 250k,
      500k and 1 Mbps; restores the configured bit rate and restarts the CAN
      worker afterwards.
-   * `$CANEchoOn` -- send `0x6F = 0` once (broadcast + addresses 1..8) without
+   * `$CANEchoOn` -- send `0x6F = 0` once (broadcast + configured addresses 1..16) without
      scanning; use it after connecting a new driver.
    * `$CANStatus` -- TWAI state, tx/rx error counters, bus error count,
      queue fill, number of bus-off recoveries, configured pins/baud/ID and the
      cached echo state.
-   * `$CANClear` -- release the stall protection (0xF9) on addresses 1..8 and
+   * `$CANClear` -- release the stall protection (0xF9) on configured addresses 1..16 and
      report how many drivers acknowledged.  0xF9 does not disable the motor.
      Do NOT use a broadcast 0xFB "clear state": on firmware V1.6 bench testing
      it made all four drivers stop answering until they were power cycled.
@@ -232,7 +232,10 @@ position within about 0.01 mm.
      driver reset too).
    * `$CANPos` -- read actual position (0x2A), position error (0x2B), speed
      (0x29) and in-position flag (0x30) for every answering driver.
-   * `$CANStop` -- safe stop: broadcast motor disable (`0xFA=1`).  The 0xFC
+   * `$CANStop` -- latched safe stop: addressed motor disable (`0xFA=1`) and
+   readback verification; all drivers must report disabled, otherwise the
+   command errors and the bus remains latched.  `$CANReset` clears the latch.
+   The 0xFC
      immediate-brake command is intentionally not used because its brake state
      cannot be cleared safely on firmware V1.6 (broadcast 0xFB locks all
      drivers until power cycle).
@@ -295,7 +298,7 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 
 | M-code | Action |
 | --- | --- |
-| M150 | CAN scan (transceiver/TWAI + version read of addresses 1..8) |
+| M150 | CAN scan (transceiver/TWAI + version read of configured addresses 1..16) |
 | M151 | multi-baud recovery scan (`$CANScan=all`) |
 | M152 | bus status (`$CANStatus`) |
 | M153 | per-driver status/stall/enable/in-position (`$CANFaults`) |

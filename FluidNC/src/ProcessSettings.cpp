@@ -1238,6 +1238,10 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
 #    endif
 #if defined(ESP32) || defined(CONFIG_IDF_TARGET_ESP32S3)
         if (bus == 0) {
+            // Release the hardware I2C0 peripheral before taking its pins as
+            // GPIO.  Without this, Wire.begin() later sees the bus as already
+            // initialized and never restores the pins.
+            i2c_master_deinit(bus);
             log_info("I2C0 software (bit-bang) scan, normal pins");
             log_info(" forward:");
             bb_scan_pins(sdaNum, sclNum, false);

@@ -12,6 +12,11 @@ bool i2c_master_init(objnum_t bus_number, pinnum_t sda_pin, pinnum_t scl_pin, ui
     log_info("I2C bus " << bus_number << " init " << (ok ? "OK" : "FAILED"));
     return !ok;
 };
+bool i2c_master_deinit(objnum_t bus_number) {
+    TwoWire& i2c = bus_number ? Wire1 : Wire;
+    i2c.end();
+    return false;
+}
 int i2c_write(objnum_t bus_number, uint8_t address, const uint8_t* data, size_t count) {
     TwoWire& i2c = bus_number ? Wire1 : Wire;
 
