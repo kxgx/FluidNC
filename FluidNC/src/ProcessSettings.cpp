@@ -1335,8 +1335,8 @@ static Error can_enable(const char* value, AuthenticationLevel auth_level, Chann
     }
     char*      end = nullptr;
     const long address = strtol(value, &end, 10);
-    if (end == value || *end != '\0' || address < 1 || address > 255) {
-        log_info("CAN enable: invalid address");
+    if (end == value || *end != '\0' || address < 1 || address > int(Machine::CanBus::MAX_CLIENTS)) {
+        log_info("CAN enable: invalid address (1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
         return Error::InvalidValue;
     }
     if (!config->_can->set_driver_enable(uint8_t(address), true)) {
@@ -1367,8 +1367,8 @@ static Error can_move(const char* value, AuthenticationLevel auth_level, Channel
     }
     const char* second = end + 1;
     const long  delta  = strtol(second, &end, 10);
-    if (end == second || *end != '\0' || address < 1 || address > 255 || delta == 0) {
-        log_info("CAN move: invalid address/delta");
+    if (end == second || *end != '\0' || address < 1 || address > int(Machine::CanBus::MAX_CLIENTS) || delta == 0) {
+        log_info("CAN move: invalid address/delta (address 1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
         return Error::InvalidValue;
     }
     if (!config->_can->send_single_position(uint8_t(address), int32_t(delta), 100, 50)) {
@@ -1399,8 +1399,9 @@ static Error can_group(const char* value, AuthenticationLevel auth_level, Channe
     }
     const char* second = end + 1;
     const long  group  = strtol(second, &end, 10);
-    if (end == second || *end != '\0' || slave < 1 || slave > 255 || group < 1 || group > 255 || slave == group) {
-        log_info("CAN group: invalid slave/group address");
+    if (end == second || *end != '\0' || slave < 1 || slave > int(Machine::CanBus::MAX_CLIENTS) || group < 1 || group > 255 ||
+        slave == group) {
+        log_info("CAN group: invalid slave/group address (slave 1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
         return Error::InvalidValue;
     }
     if (!config->_can->set_group_address(uint8_t(slave), uint8_t(group))) {

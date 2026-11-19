@@ -254,11 +254,7 @@ def stage_variant(
         install_description="升级应用区（0x10000），保留 bootloader/partitions",
         erase=False,
         addrinfo_path=ota / "firmware.addrinfo",
-        extra_images=(
-            [("fluidcan-boot-app0", ota / "boot_app0.bin", "0xe000")]
-            if variant["flash"] == "8 MB"
-            else None
-        ),
+        extra_images=[("fluidcan-boot-app0", ota / "boot_app0.bin", "0xe000")],
     )
     usb_manifest = manifest(
         variant,

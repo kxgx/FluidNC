@@ -604,7 +604,7 @@ namespace Machine {
             return false;
         }
         _ready = true;
-        _stop_latched = false;
+        // Do not clear a latched $CANStop here; only $CANReset may release it.
         // Runtime reconfiguration closes command echo and may have reset the
         // driver parameter state.  Force every client through a fresh sync so
         // it cannot keep using an old position base.
@@ -623,6 +623,11 @@ namespace Machine {
     void CanBus::start_worker() {
         if (_task_handle) {
             can_log_error("CAN: worker already running; refusing duplicate task");
+            return;
+        }
+        if (!_auto_config_ok) {
+            can_log_error("CAN: refusing to start worker; auto-config is not complete");
+            _control_ready = false;
             return;
         }
         _stop_requested = false;
@@ -793,16 +798,10 @@ namespace Machine {
         if (!_ready) {
             return;
         }
-        // Stop the motors immediately: broadcast "disable" (0xFA data 1).
-        Lock lock(*this);
-        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t data = 1;
-        size_t  len  = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, &data, 1, request, sizeof(request));
-        if (len) {
-            send_message(request, len, 100);
-            vTaskDelay(pdMS_TO_TICKS(5));
-        }
-        flush_receive();
+        // Use the latched, addressed, readback-verified stop path.  This also
+        // waits for an in-flight worker poll so it cannot re-enable a motor
+        // after the inhibit was raised.
+        stop_all_drivers();
     }
 
     void CanBus::mark_driver_configured() {
@@ -1601,7 +1600,7 @@ namespace Machine {
     }
 
     bool CanBus::set_driver_enable(uint8_t address, bool enable) {
-        if (!_ready || _inhibited || (_stop_latched && enable)) {
+        if (!_ready || !_control_ready || _inhibited || (_stop_latched && enable)) {
             return false;
         }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1644,7 +1643,7 @@ namespace Machine {
     }
 
     bool CanBus::set_group_address(uint8_t address, uint8_t group) {
-        if (!_ready || _stop_latched || _inhibited || group == 0 || address == group) {
+        if (!_ready || !_control_ready || _stop_latched || _inhibited || group == 0 || address == group) {
             return false;
         }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1701,7 +1700,7 @@ namespace Machine {
     }
 
     bool CanBus::send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel) {
-        if (!_ready || _stop_latched || _inhibited) {
+        if (!_ready || !_control_ready || _stop_latched || _inhibited) {
             return false;
         }
         int32_t current = 0;
