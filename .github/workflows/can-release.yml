@@ -232,6 +232,8 @@ jobs:
             ```
 
             OTA uses `OTA/firmware.bin`; USB full flash uses `USB/firmware.factory.bin`.
+            The factory image writes bootloader/partitions/NVS from 0x0; it can reset
+            NVS configuration even with erase=false. Prefer OTA for normal upgrades.
 
             | Variant | Env | Flash | PSRAM | OLED | USB | Release zip |
             |---|---|---|---|---|---|---|

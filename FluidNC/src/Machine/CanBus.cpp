@@ -1787,17 +1787,17 @@ namespace Machine {
         return false;
     }
 
-    void CanBus::stop_all_drivers() {
-        if (!driver_ok("stop")) return;
+    bool CanBus::stop_all_drivers() {
+        if (!driver_ok("stop")) return false;
         if (!_ready) {
             log_info("CAN stop: bus not ready");
-            return;
+            return false;
         }
         _stop_latched = true;
         // Let a worker pass that already passed the latch check finish its
         // current poll.  Only then take the bus lock, otherwise that pass can
         // re-enable a motor after the addressed disable below.
-        for (int i = 0; i < 500 && _worker_busy && !_task_exited; ++i) {
+        while (_worker_busy && !_task_exited) {
             vTaskDelay(pdMS_TO_TICKS(10));
         }
         Lock lock(*this);
@@ -1845,9 +1845,10 @@ namespace Machine {
                 ++disabled;
             }
         }
-        can_log_warn("CAN: safe stop: addressed motor disable acknowledged by " << disabled << "/" << count
-                                                                          << " driver(s); bus control latched");
+        can_log_warn("CAN: safe stop: addressed motor disable verified for " << disabled << "/" << count
+                                                                         << " driver(s); bus control latched");
         flush_receive();
+        return disabled == int(count);
     }
 
     void CanBus::read_raw(uint8_t address, uint8_t function) {
@@ -2032,16 +2033,18 @@ namespace Machine {
             return true;
         }
         _stop_requested = true;
-        // A transaction is bounded by the protocol timeout (well under two
-        // seconds), so the worker normally exits promptly.  If it does not,
-        // keep the handle and mutexes: callers must not uninstall the driver
-        // or free synchronization objects while the task may still use them.
-        for (int i = 0; i < 400 && !_task_exited; ++i) {
-            vTaskDelay(pdMS_TO_TICKS(5));
-        }
-        if (!_task_exited) {
-            can_log_error("CAN: worker task did not stop; keeping bus and mutexes alive");
-            return false;
+        // Wait until the worker has actually exited.  Some sync/tuning paths
+        // can take several seconds on a marginal bus; returning early and
+        // deleting the object would leave a live task with a dangling this.
+        // A hang here is safer than a use-after-free during config reload.
+        uint32_t lastLog = now_ms();
+        while (!_task_exited) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+            uint32_t now = now_ms();
+            if (now - lastLog >= 2000) {
+                lastLog = now;
+                can_log_warn("CAN: waiting for worker task to exit");
+            }
         }
         _task_handle   = nullptr;
         _control_ready = false;

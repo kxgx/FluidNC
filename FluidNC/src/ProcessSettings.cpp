@@ -1492,7 +1492,10 @@ static Error can_stop(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN stop: no can: section configured");
         return Error::Ok;
     }
-    config->_can->stop_all_drivers();
+    if (!config->_can->stop_all_drivers()) {
+        log_info("CAN stop: not all drivers verified disabled; bus remains latched");
+        return Error::InvalidValue;
+    }
     return Error::Ok;
 }
 

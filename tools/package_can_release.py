@@ -149,6 +149,7 @@ def manifest(
     install_description: str,
     erase: bool,
     addrinfo_path: Path | None = None,
+    extra_images: list[tuple[str, Path, str]] | None = None,
 ) -> dict:
     result = {
         "name": f"FluidCAN {variant['label']}",
@@ -188,8 +189,16 @@ def manifest(
             ],
         },
     }
+    if extra_images:
+        image_list = result["installable"]["choices"][0]["choices"][0]["images"]
+        for name, path, offset in extra_images:
+            if path.is_file():
+                result["images"][name] = image_info(path, offset, path.parent)
+                image_list.append(name)
     if addrinfo_path is not None and addrinfo_path.is_file():
-        result["addrinfo"] = image_info(addrinfo_path, "0x0", addrinfo_path.parent)
+        info = image_info(addrinfo_path, "0x0", addrinfo_path.parent)
+        info.pop("offset", None)
+        result["addrinfo"] = info
     return result
 
 
@@ -245,6 +254,11 @@ def stage_variant(
         install_description="升级应用区（0x10000），保留 bootloader/partitions",
         erase=False,
         addrinfo_path=ota / "firmware.addrinfo",
+        extra_images=(
+            [("fluidcan-boot-app0", ota / "boot_app0.bin", "0xe000")]
+            if variant["flash"] == "8 MB"
+            else None
+        ),
     )
     usb_manifest = manifest(
         variant,
@@ -301,8 +315,9 @@ USB 完整刷写文件（ESP32-S3）：
 
 注意：
   - 普通升级优先用 OTA/firmware.bin 写 0x10000，保留配置。
-  - factory 是完整重装镜像；如果手动执行 erase，NVS/LittleFS 中的配置会被清空。
-  - 本目录 manifest 使用 erase=false；需要彻底清空时请先备份配置。
+  - factory 从 0x0 开始覆盖 bootloader/partitions/NVS/app；即使不执行 erase，
+    也可能把 NVS 中的配置恢复到默认值。LittleFS 分区在 app 之外，erase=false 时会保留。
+  - 本目录 manifest 使用 erase=false；需要彻底清空时请先备份 config.yaml 和文件系统。
 
 ESP32-S3 参数：Flash {variant['flash']}, PSRAM {variant['psram']}, OLED {variant['oled']}, USB {variant['usb']}
 """,

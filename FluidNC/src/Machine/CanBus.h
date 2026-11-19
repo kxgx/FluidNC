@@ -191,7 +191,7 @@ namespace Machine {
         void report_driver_configs();
 
         // Broadcasts the immediate-brake command (0xFC) to all drivers.
-        void stop_all_drivers();
+        bool stop_all_drivers();
 
     // Read one driver's current encoder position.
     bool read_driver_position(uint8_t address, int32_t& position);
@@ -250,8 +250,8 @@ namespace Machine {
         bool resume();
 
         bool control_ready() const { return _control_ready; }
-        bool stop_latched() const { return _stop_latched; }
-        void clear_stop_latch() { _stop_latched = false; }
+        bool stop_latched() const { return _stop_latched.load(std::memory_order_acquire); }
+        void clear_stop_latch() { _stop_latched.store(false, std::memory_order_release); }
 
         // Serializes transactions.  The protocol has no request IDs, so a
         // transaction must hold this from its first transmitted frame until
@@ -314,9 +314,9 @@ namespace Machine {
         bool              _ready          = false;
         bool              _control_ready  = false;
         bool              _auto_config_ok = false;
-        bool              _stop_latched   = false;
+        std::atomic<bool> _stop_latched{ false };
         std::atomic<bool> _diagnostic_active{ false };
-        volatile bool     _worker_busy    = false;
+        std::atomic<bool> _worker_busy{ false };
         SemaphoreHandle_t _bus_mutex      = nullptr;
         SemaphoreHandle_t _list_mutex     = nullptr;
         TaskHandle_t      _task_handle    = nullptr;

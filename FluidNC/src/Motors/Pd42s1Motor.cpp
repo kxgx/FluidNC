@@ -423,6 +423,10 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Motor::sync() {
+        if (_bus && _bus->stop_latched()) {
+            _disabled = true;
+            return false;
+        }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  responseLen = 0;
@@ -466,7 +470,7 @@ namespace MotorDrivers {
         // was out of sync (for example $MD or an alarm after a read failure).
         // Never blindly re-enable here; use the latest requested state and
         // preserve a request that changes while this transaction is in flight.
-        const bool     syncDisable = _disableRequested;
+        const bool     syncDisable = _disableRequested || _bus->stop_latched();
         const uint32_t syncGen     = _disableGeneration;
         len = Pd42s1Protocol::build_enable_command(address, !syncDisable, request, sizeof(request));
         if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
