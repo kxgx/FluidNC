@@ -1649,7 +1649,11 @@ void make_user_commands() {
     new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, anyState);
     new ReportCommand("CANLog", "System/CANLog", can_log, anyState);
 #    if defined(ESP32)
-    new ReportCommand("CANSweep", "System/CANSweep", can_sweep, notIdleOrAlarm);
+    // CANSweep is a bring-up-only probe that drives arbitrary GPIOs.  On this
+    // board that includes the OLED I2C pins and the Z limit input; running it
+    // disturbed I2C and caused a Z stall.  Keep the implementation for bench
+    // diagnostics, but do not expose it as a live controller command.
+    // new ReportCommand("CANSweep", "System/CANSweep", can_sweep, notIdleOrAlarm);
 #    endif
 #endif
     new ReportCommand("", "Help", show_help, anyState);
