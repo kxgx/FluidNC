@@ -22,6 +22,7 @@ idf_component_register(SRCS BTConfig.cpp
 							lineedit.cpp
 							Logging.cpp
 							Main.cpp
+							LumenCompat/LumenCompat.cpp
 							MotionControl.cpp
 							NutsBolts.cpp
 							OLED.cpp
@@ -49,6 +50,7 @@ idf_component_register(SRCS BTConfig.cpp
 							Uart.cpp
 							UartChannel.cpp
 							UTF8.cpp
+							WS2812/WS2812.cpp
 							xmodem.cpp
 							Configuration/AfterParse.cpp
 							Configuration/Completer.cpp
@@ -84,6 +86,7 @@ idf_component_register(SRCS BTConfig.cpp
 							Machine/Motor.cpp
 							Machine/ProbeEventPin.cpp
 							Machine/CanBus.cpp
+							Machine/NullCanDriver.cpp
 							Machine/SPIBus.cpp
 							Machine/UserInputs.cpp
 							Machine/UserOutputs.cpp
