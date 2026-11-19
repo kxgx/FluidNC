@@ -1337,7 +1337,10 @@ static Error can_enable(const char* value, AuthenticationLevel auth_level, Chann
         log_info("CAN enable: invalid address");
         return Error::InvalidValue;
     }
-    config->_can->set_driver_enable(uint8_t(address), true);
+    if (!config->_can->set_driver_enable(uint8_t(address), true)) {
+        log_info("CAN enable: failed");
+        return Error::InvalidValue;
+    }
     return Error::Ok;
 }
 
@@ -1366,7 +1369,10 @@ static Error can_move(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN move: invalid address/delta");
         return Error::InvalidValue;
     }
-    config->_can->send_single_position(uint8_t(address), int32_t(delta), 100, 50);
+    if (!config->_can->send_single_position(uint8_t(address), int32_t(delta), 100, 50)) {
+        log_info("CAN move: failed");
+        return Error::InvalidValue;
+    }
     return Error::Ok;
 }
 
@@ -1397,7 +1403,7 @@ static Error can_group(const char* value, AuthenticationLevel auth_level, Channe
     }
     if (!config->_can->set_group_address(uint8_t(slave), uint8_t(group))) {
         log_info("CAN group: failed");
-        return Error::Ok;
+        return Error::InvalidValue;
     }
     log_info("CAN group: address " << slave << " now group " << group);
     return Error::Ok;
@@ -1431,14 +1437,23 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
             }
         }
     }
-    int succeeded = 0;
+    int     succeeded = 0;
+    uint8_t zeroed[8];
     for (int i = 0; i < count; ++i) {
         if (config->_can->zero_driver_position(uint8_t(addresses[i]))) {
-            ++succeeded;
+            zeroed[succeeded++] = uint8_t(addresses[i]);
         }
         delay_ms(20);
     }
     log_info("CAN zero: acknowledged " << succeeded << "/" << count << " address(es)");
+    if (succeeded > 0) {
+        if (config->_can->wait_for_driver_sync(zeroed, succeeded, 2000)) {
+            log_info("CAN zero: drivers resynchronised");
+        } else {
+            log_info("CAN zero: timeout waiting for driver resync");
+            return Error::InvalidValue;
+        }
+    }
     return Error::Ok;
 }
 
@@ -1641,12 +1656,12 @@ void make_user_commands() {
     new ReportCommand("CANGroup", "System/CANGroup", can_group, anyState);
     new ReportCommand("CANMove", "System/CANMove", can_move, anyState);
     new ReportCommand("CANEnable", "System/CANEnable", can_enable, anyState);
-    new ReportCommand("CANFaults", "System/CANFaults", can_faults, anyState);
-    new ReportCommand("CANPos", "System/CANPos", can_pos, anyState);
+    new ReportCommand("CANFaults", "System/CANFaults", can_faults, notIdleOrAlarm);
+    new ReportCommand("CANPos", "System/CANPos", can_pos, notIdleOrAlarm);
     new ReportCommand("CANStop", "System/CANStop", can_stop, anyState);
-    new ReportCommand("CANRead", "System/CANRead", can_read, anyState);
+    new ReportCommand("CANRead", "System/CANRead", can_read, notIdleOrAlarm);
     new ReportCommand("CANAutoConfig", "System/CANAutoConfig", can_auto_config, notIdleOrAlarm);
-    new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, anyState);
+    new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, notIdleOrAlarm);
     new ReportCommand("CANLog", "System/CANLog", can_log, anyState);
 #    if defined(ESP32)
     // CANSweep is a bring-up-only probe that drives arbitrary GPIOs.  On this

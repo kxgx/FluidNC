@@ -42,6 +42,10 @@ namespace Machine {
         // clients that do not use a PD42S1-style address.
         virtual uint8_t bus_address() const { return 0; }
 
+        // True once the client has rebuilt its cached position after a zero
+        // or a recovery sync.  Used to make $CANZero synchronous.
+        virtual bool is_synced() const { return false; }
+
         // The driver's encoder position was zeroed by a maintenance command.
         // The client must resynchronise its cached base position before it can
         // send another absolute target.
@@ -177,6 +181,11 @@ namespace Machine {
 
     // Send 0xF8 to one driver: zero its current encoder position.
     bool zero_driver_position(uint8_t address);
+
+    // Wait until every listed address has a client that reports is_synced().
+    // Used after $CANZero so a following motion command cannot use a stale
+    // position base.  Returns false on timeout.
+    bool wait_for_driver_sync(const uint8_t* addresses, size_t count, uint32_t timeout_ms);
 
     // Enable or disable one driver (0xFA).  In group mode the silent members
     // still execute the addressed command.

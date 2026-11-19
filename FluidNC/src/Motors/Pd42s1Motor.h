@@ -41,6 +41,7 @@ namespace MotorDrivers {
         // CanBusClient override -- called from the CAN worker task.
         void    can_poll(uint32_t now_ms) override;
         uint8_t bus_address() const override { return uint8_t(_address); }
+        bool    is_synced() const override { return _synced; }
         void    on_position_zeroed() override;
         void    set_axis(axis_t axis) override { _axis = axis; }
         void    set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) override;

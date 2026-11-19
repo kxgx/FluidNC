@@ -16,6 +16,7 @@
 
 #    include <cstdio>
 #    include <cstring>
+#    include <limits>
 
 namespace Machine {
 
@@ -1536,7 +1537,12 @@ namespace Machine {
             can_log_error("CAN move: cannot read position at address " << int(address));
             return false;
         }
-        const int32_t target = current + delta;
+        const int64_t target64 = int64_t(current) + int64_t(delta);
+        if (target64 < std::numeric_limits<int32_t>::min() || target64 > std::numeric_limits<int32_t>::max()) {
+            can_log_error("CAN move: target overflow at address " << int(address));
+            return false;
+        }
+        const int32_t target = int32_t(target64);
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[16];
         size_t  responseLen = 0;
@@ -1589,6 +1595,32 @@ namespace Machine {
         }
         can_log_info("CAN: zero position at address " << int(address) << (ok ? " ok" : " failed"));
         return ok;
+    }
+
+    bool CanBus::wait_for_driver_sync(const uint8_t* addresses, size_t count, uint32_t timeout_ms) {
+        if (!count) {
+            return true;
+        }
+        const uint32_t deadline = now_ms() + timeout_ms;
+        while (int32_t(deadline - now_ms()) > 0) {
+            bool all = true;
+            for (size_t a = 0; a < count && all; ++a) {
+                bool found = false;
+                for (size_t i = 0; i < _n_clients; ++i) {
+                    CanBusClient* client = _clients[i];
+                    if (client && client->bus_address() == addresses[a] && client->is_synced()) {
+                        found = true;
+                        break;
+                    }
+                }
+                all = found;
+            }
+            if (all) {
+                return true;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        return false;
     }
 
     void CanBus::stop_all_drivers() {
