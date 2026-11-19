@@ -1274,6 +1274,7 @@ static Error can_scan(const char* value, AuthenticationLevel auth_level, Channel
             config->_can->scan_all_bauds();
         } else {
             log_info("CAN scan: unknown option '" << value << "' (only 'all' is supported)");
+            return Error::InvalidValue;
         }
         return Error::Ok;
     }
@@ -1481,15 +1482,20 @@ static Error can_read(const char* value, AuthenticationLevel auth_level, Channel
     unsigned long addr = strtoul(value, &end, 0);
     if (end == value) {
         log_info("CAN read: bad address in '" << value << "'");
-        return Error::Ok;
+        return Error::InvalidValue;
     }
     while (*end == ',' || *end == ':' || *end == ' ') {
         ++end;
     }
-    unsigned long func = strtoul(end, &end, 0);
-    if (addr < 1 || addr > 255 || func > 255) {
+    if (*end == '\0') {
+        log_info("CAN read: usage $CANRead=<address>,<function>  e.g. $CANRead=1,0x2C");
+        return Error::InvalidValue;
+    }
+    char*         funcEnd = nullptr;
+    unsigned long func    = strtoul(end, &funcEnd, 0);
+    if (funcEnd == end || *funcEnd != '\0' || addr < 1 || addr > 255 || func > 255) {
         log_info("CAN read: address must be 1..255 and function 0..255");
-        return Error::Ok;
+        return Error::InvalidValue;
     }
     config->_can->read_raw(uint8_t(addr), uint8_t(func));
     return Error::Ok;
@@ -1626,11 +1632,11 @@ void make_user_commands() {
     new ReportCommand("I2CScan", "System/I2CScan", i2c_scan, anyState);
 #endif
 #if MAX_N_CAN
-    new ReportCommand("CANScan", "System/CANScan", can_scan, anyState);
-    new ReportCommand("CANEchoOn", "System/CANEchoOn", can_echo_on, anyState);
+    new ReportCommand("CANScan", "System/CANScan", can_scan, notIdleOrAlarm);
+    new ReportCommand("CANEchoOn", "System/CANEchoOn", can_echo_on, notIdleOrAlarm);
     new ReportCommand("CANStatus", "System/CANStatus", can_status, anyState);
-    new ReportCommand("CANClear", "System/CANClear", can_clear, anyState);
-    new ReportCommand("CANReset", "System/CANReset", can_reset, anyState);
+    new ReportCommand("CANClear", "System/CANClear", can_clear, notIdleOrAlarm);
+    new ReportCommand("CANReset", "System/CANReset", can_reset, notIdleOrAlarm);
     new ReportCommand("CANZero", "System/CANZero", can_zero, anyState);
     new ReportCommand("CANGroup", "System/CANGroup", can_group, anyState);
     new ReportCommand("CANMove", "System/CANMove", can_move, anyState);
@@ -1639,11 +1645,11 @@ void make_user_commands() {
     new ReportCommand("CANPos", "System/CANPos", can_pos, anyState);
     new ReportCommand("CANStop", "System/CANStop", can_stop, anyState);
     new ReportCommand("CANRead", "System/CANRead", can_read, anyState);
-    new ReportCommand("CANAutoConfig", "System/CANAutoConfig", can_auto_config, anyState);
+    new ReportCommand("CANAutoConfig", "System/CANAutoConfig", can_auto_config, notIdleOrAlarm);
     new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, anyState);
     new ReportCommand("CANLog", "System/CANLog", can_log, anyState);
 #    if defined(ESP32)
-    new ReportCommand("CANSweep", "System/CANSweep", can_sweep, anyState);
+    new ReportCommand("CANSweep", "System/CANSweep", can_sweep, notIdleOrAlarm);
 #    endif
 #endif
     new ReportCommand("", "Help", show_help, anyState);
