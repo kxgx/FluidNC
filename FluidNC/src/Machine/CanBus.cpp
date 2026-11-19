@@ -344,6 +344,7 @@ namespace Machine {
     bool CanBus::auto_configure_drivers() {
         static const uint32_t bauds[] = { 125000, 250000, 500000, 1000000 };
         const uint32_t        target  = _baud;
+        _auto_config_ok = false;
 
         // This routine must never broadcast a baud-rate or save command.  A
         // broadcast has no acknowledgement, so one driver that misses the
@@ -580,7 +581,8 @@ namespace Machine {
         for (size_t i = 0; i < addressCount; ++i) {
             set_echo_to_address_locked(addresses[i], false);
         }
-        _echo_state = false;
+        _echo_state    = false;
+        _auto_config_ok = true;
         can_log_info("CAN: command echo disabled on the drivers after auto-config");
         return true;
     }
@@ -591,7 +593,9 @@ namespace Machine {
         }
         const uint32_t target = _baud;
         can_log_info("CAN: starting manual auto-config (target " << target << " baud)");
-        suspend();
+        if (!suspend()) {
+            return false;
+        }
         bool ok = auto_configure_drivers();
         if (!ok) {
             log_error("CAN auto-config failed or incomplete; CAN motor worker is not started");
@@ -600,6 +604,7 @@ namespace Machine {
             return false;
         }
         _ready = true;
+        _stop_latched = false;
         apply_configured_group();
         start_worker();
         log_info("CAN auto-config finished OK");
@@ -608,26 +613,37 @@ namespace Machine {
     }
 
     void CanBus::start_worker() {
+        if (_task_handle) {
+            can_log_error("CAN: worker already running; refusing duplicate task");
+            return;
+        }
         _stop_requested = false;
         _task_exited    = false;
         _ready          = true;
 
         if (xTaskCreate(worker_entry, "can", 4096, this, 2, &_task_handle) != pdPASS) {
             can_log_error("CAN: cannot create worker task");
-            _task_handle = nullptr;
-            _ready       = false;
-        }
-    }
-
-    void CanBus::suspend() {
-        if (!_ready) {
+            _task_handle  = nullptr;
+            _ready        = false;
+            _control_ready = false;
             return;
         }
-        stop_worker();
+        _control_ready = _auto_config_ok;
+    }
+
+    bool CanBus::suspend() {
+        if (!_ready) {
+            return true;
+        }
+        if (!stop_worker()) {
+            can_log_error("CAN: suspend aborted; worker did not stop");
+            return false;
+        }
         twai_stop();
         twai_driver_uninstall();
         _ready = false;
         delay(5);
+        return true;
     }
 
     bool CanBus::resume() {
@@ -657,7 +673,9 @@ namespace Machine {
         auto tx_pin = _tx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
         auto rx_pin = _rx.getNative(Pin::Capabilities::Native | Pin::Capabilities::Input);
 
-        suspend();
+        if (!suspend()) {
+            return false;
+        }
 
         pinMode(rx_pin, INPUT_PULLUP);
         pinMode(tx_pin, OUTPUT);
@@ -1054,6 +1072,7 @@ namespace Machine {
         for (size_t i = 0; i < count; ++i) {
             enable_driver_echo_locked(addresses[i]);
         }
+        _echo_state = true;
     }
 
     void CanBus::enable_all_driver_echo() {
@@ -1208,11 +1227,14 @@ namespace Machine {
 
         static const uint32_t bauds[]    = { 125000, 250000, 500000, 1000000 };
         const uint32_t        configured = _baud;
+        const bool            echoBefore = _echo_state;
         int                   total      = 0;
 
         // Stop the worker and release the bus; no client transaction may run
         // while the driver is reinstalled at the different bit rates.
-        suspend();
+        if (!suspend()) {
+            return 0;
+        }
 
         {
             Lock lock(*this);
@@ -1249,7 +1271,15 @@ namespace Machine {
             return total;
         }
         start_worker();
-        log_info("CAN scan: restored " << _baud << " baud");
+        {
+            Lock lock(*this);
+            if (echoBefore) {
+                enable_all_driver_echo_locked();
+            } else {
+                disable_all_driver_echo_locked();
+            }
+        }
+        log_info("CAN scan: restored " << _baud << " baud and command echo " << (echoBefore ? "enabled" : "disabled"));
         return total;
     }
 
@@ -1752,20 +1782,39 @@ namespace Machine {
             log_info("CAN stop: bus not ready");
             return;
         }
+        _stop_latched = true;
         Lock lock(*this);
 
         // Safe stop = disable all motor outputs.  The 0xFC immediate-brake
         // command is deliberately NOT used: on firmware V1.6 the brake state
         // can only be cleared with 0xFB, and a broadcast 0xFB leaves all
         // drivers silent until they are power cycled (bench-tested).
-        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t disable = 1;
-        size_t  len     = Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, &disable, 1, request, sizeof(request));
-        if (!len) {
-            return;
+        // Addressed disable is used because a broadcast is not acknowledged
+        // by every driver variant; then latch the bus so sync/$ME cannot
+        // silently re-enable motion.
+        uint8_t addresses[MAX_CLIENTS];
+        size_t  count = configured_addresses(addresses, MAX_CLIENTS);
+        if (!count) {
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[count++] = uint8_t(i + 1);
+            }
         }
-        can_log_warn("CAN: safe stop: broadcasting motor disable (0xFA=1); 0xFC brake is disabled for safety");
-        send_message(request, len, 100);
+        int disabled = 0;
+        for (size_t i = 0; i < count; ++i) {
+            uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+            size_t  len = Pd42s1Protocol::build_enable_command(addresses[i], false, request, sizeof(request));
+            for (int attempt = 0; attempt < 2; ++attempt) {
+                uint8_t response[16];
+                size_t  responseLen = 0;
+                if (transact(request, len, response, sizeof(response), responseLen, 150) &&
+                    Pd42s1Protocol::parse_ack(response, responseLen)) {
+                    ++disabled;
+                    break;
+                }
+            }
+        }
+        can_log_warn("CAN: safe stop: addressed motor disable acknowledged by " << disabled << "/" << count
+                                                                          << " driver(s); bus control latched");
         flush_receive();
     }
 
@@ -1893,6 +1942,7 @@ namespace Machine {
             enable_driver_echo_locked(addresses[i]);
         }
         flush_receive();
+        _stop_latched = false;
         can_log_info("CAN: driver reset done, command echo re-enabled; run $CANScan");
     }
 
@@ -1912,7 +1962,7 @@ namespace Machine {
             }
             xSemaphoreGive(_list_mutex);
 
-            if (!_inhibited) {
+            if (!_inhibited && !_stop_latched) {
                 for (size_t i = 0; i < count; ++i) {
                     if (snapshot[i]) {
                         snapshot[i]->can_poll(now);
@@ -1938,30 +1988,34 @@ namespace Machine {
         static_cast<CanBus*>(arg)->worker();
     }
 
-    void CanBus::stop_worker() {
+    bool CanBus::stop_worker() {
         if (!_task_handle) {
-            return;
+            _control_ready = false;
+            return true;
         }
         _stop_requested = true;
         // A transaction is bounded by the protocol timeout (well under two
         // seconds), so the worker normally exits promptly.  If it does not,
-        // leave it and its mutexes alone rather than deleting a mutex that the
-        // task might still be holding.
+        // keep the handle and mutexes: callers must not uninstall the driver
+        // or free synchronization objects while the task may still use them.
         for (int i = 0; i < 400 && !_task_exited; ++i) {
             vTaskDelay(pdMS_TO_TICKS(5));
         }
         if (!_task_exited) {
-            can_log_error("CAN: worker task did not stop");
-            _task_handle = nullptr;
-            _bus_mutex   = nullptr;
-            _list_mutex  = nullptr;
-            return;
+            can_log_error("CAN: worker task did not stop; keeping bus and mutexes alive");
+            return false;
         }
-        _task_handle = nullptr;
+        _task_handle   = nullptr;
+        _control_ready = false;
+        return true;
     }
 
     CanBus::~CanBus() {
-        stop_worker();
+        if (!stop_worker()) {
+            // Do not delete mutexes or uninstall TWAI while the worker may
+            // still be executing against this object.
+            return;
+        }
         if (_ready) {
             twai_stop();
             twai_driver_uninstall();

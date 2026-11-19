@@ -158,6 +158,7 @@ namespace MotorDrivers {
         _bus = config ? config->_can : nullptr;
         Assert(_bus != nullptr, "pd42s1 motor driver requires a can: section");
         Assert(_bus->ready(), "CAN bus is not ready");
+        Assert(_bus->control_ready(), "CAN auto-config did not complete; motion disabled");
 
         _bus->add_client(this);
         Stepping::assignMotorDriver(axis_index(), dual_axis_index(), this);

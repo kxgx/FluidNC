@@ -148,8 +148,9 @@ def manifest(
     install_name: str,
     install_description: str,
     erase: bool,
+    addrinfo_path: Path | None = None,
 ) -> dict:
-    return {
+    result = {
         "name": f"FluidCAN {variant['label']}",
         "version": tag,
         "variant": variant["label"],
@@ -187,6 +188,9 @@ def manifest(
             ],
         },
     }
+    if addrinfo_path is not None and addrinfo_path.is_file():
+        result["addrinfo"] = image_info(addrinfo_path, "0x0", addrinfo_path.parent)
+    return result
 
 
 def write_text(path: Path, text: str) -> None:
@@ -225,6 +229,9 @@ def stage_variant(
     shutil.copy2(source / "firmware.addrinfo", ota / "firmware.addrinfo")
     for name in ("firmware.factory.bin", "bootloader.bin", "partitions.bin", "firmware.addrinfo"):
         shutil.copy2(source / name, usb / name)
+    if (source / "boot_app0.bin").is_file():
+        shutil.copy2(source / "boot_app0.bin", ota / "boot_app0.bin")
+        shutil.copy2(source / "boot_app0.bin", usb / "boot_app0.bin")
 
     ota_manifest = manifest(
         variant,
@@ -237,6 +244,7 @@ def stage_variant(
         install_name="can-ota",
         install_description="升级应用区（0x10000），保留 bootloader/partitions",
         erase=False,
+        addrinfo_path=ota / "firmware.addrinfo",
     )
     usb_manifest = manifest(
         variant,
@@ -249,6 +257,7 @@ def stage_variant(
         install_name="can-full",
         install_description="完整刷写应用区（factory image @ 0x0，不主动擦除整片）",
         erase=False,
+        addrinfo_path=usb / "firmware.addrinfo",
     )
     write_text(ota / "manifest.json", json.dumps(ota_manifest, ensure_ascii=False, indent=2) + "\n")
     write_text(usb / "manifest.json", json.dumps(usb_manifest, ensure_ascii=False, indent=2) + "\n")
@@ -269,6 +278,7 @@ def stage_variant(
 
 OTA 文件：
   firmware.bin      应用镜像，写入偏移 0x10000
+  boot_app0.bin     可选：如设备曾从 app1 启动，写 0xe000 将 otadata 指回 app0
   manifest.json     安装器/OTA 元数据
   firmware.addrinfo 调试符号地址信息
   SHA256SUMS        文件校验
@@ -284,6 +294,7 @@ USB 完整刷写文件（ESP32-S3）：
   firmware.factory.bin  完整镜像，偏移 0x0
   bootloader.bin        偏移 0x0（ESP32-S3 不是 0x1000）
   partitions.bin        偏移 0x8000
+  boot_app0.bin         可选，0xe000
   firmware.addrinfo     调试符号地址信息
   manifest.json         完整安装元数据（不主动 erase 整片）
   SHA256SUMS            文件校验
@@ -315,11 +326,13 @@ USB：{variant['usb']}
 完整说明见两个子目录中的 README.txt。
 """,
     )
-    write_checksums(ota, ["firmware.bin", "firmware.addrinfo", "manifest.json"])
-    write_checksums(
-        usb,
-        ["firmware.factory.bin", "bootloader.bin", "partitions.bin", "firmware.addrinfo", "manifest.json"],
-    )
+    ota_files = ["firmware.bin", "firmware.addrinfo", "manifest.json"]
+    usb_files = ["firmware.factory.bin", "bootloader.bin", "partitions.bin", "firmware.addrinfo", "manifest.json"]
+    if (ota / "boot_app0.bin").is_file():
+        ota_files.append("boot_app0.bin")
+        usb_files.append("boot_app0.bin")
+    write_checksums(ota, ota_files)
+    write_checksums(usb, usb_files)
 
 
 def make_zip(staging: Path, label: str, output: Path) -> None:

@@ -241,8 +241,12 @@ namespace Machine {
 
         // Releases the TWAI pins so diagnostics (like the transceiver test or
         // the pin sweep) can use them as plain GPIO, then restores the bus.
-        void suspend();
+        bool suspend();
         bool resume();
+
+        bool control_ready() const { return _control_ready; }
+        bool stop_latched() const { return _stop_latched; }
+        void clear_stop_latch() { _stop_latched = false; }
 
         // Serializes transactions.  The protocol has no request IDs, so a
         // transaction must hold this from its first transmitted frame until
@@ -286,7 +290,7 @@ namespace Machine {
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
         void        worker();
         static void worker_entry(void* arg);
-        void        stop_worker();
+        bool        stop_worker();
 
         Pin      _tx;
         Pin      _rx;
@@ -302,6 +306,9 @@ namespace Machine {
         static size_t  _configuredAddressCount;
 
         bool              _ready          = false;
+        bool              _control_ready  = false;
+        bool              _auto_config_ok = false;
+        bool              _stop_latched   = false;
         std::atomic<bool> _diagnostic_active{ false };
         SemaphoreHandle_t _bus_mutex      = nullptr;
         SemaphoreHandle_t _list_mutex     = nullptr;

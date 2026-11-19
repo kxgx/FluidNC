@@ -152,6 +152,8 @@ jobs:
           cp ".pio/build/${{ matrix.env }}/bootloader.bin" dist/
           cp ".pio/build/${{ matrix.env }}/partitions.bin" dist/
           cp ".pio/build/${{ matrix.env }}/firmware.addrinfo" dist/
+          BOOT_APP0=$(find "$HOME/.platformio/packages/framework-arduinoespressif32/tools/partitions" -name boot_app0.bin | head -1)
+          if [ -n "$BOOT_APP0" ]; then cp "$BOOT_APP0" dist/boot_app0.bin; fi
 
       - name: Upload ${{ matrix.label }}
         uses: actions/upload-artifact@v6
