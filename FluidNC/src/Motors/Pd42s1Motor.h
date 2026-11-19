@@ -60,10 +60,11 @@ namespace MotorDrivers {
             // @config address
             // @default 1
             // @tuning per-machine
-            // CAN slave address of this driver, 1..255.  Must match the value
-            // written to the driver with setting 0x60 (set slave address).
-            // Address 0 is the broadcast address and cannot be used here.
-            handler.item("address", _address, 1, 255);
+            // CAN slave address of this driver.  Must be unique and match the
+            // value written to the driver with setting 0x60 (set slave address).
+            // Address 0 is broadcast; this firmware supports MAX_CLIENTS (16)
+            // configured CAN motors.
+            handler.item("address", _address, 1, Machine::CanBus::MAX_CLIENTS);
 
             // @config sync_group
             // @default 0

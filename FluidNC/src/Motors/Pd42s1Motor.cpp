@@ -284,7 +284,6 @@ namespace MotorDrivers {
 
         const uint32_t deadline = now_ms() + timeoutMs;
         size_t         total    = 0;
-        bool           complete = false;
         while (true) {
             uint32_t now = now_ms();
             if (int32_t(deadline - now) <= 0) {
@@ -302,36 +301,34 @@ namespace MotorDrivers {
 
             size_t expected = Pd42s1Protocol::expected_response_length(response, total);
             if (expected == SIZE_MAX) {
-                break;
+                total = 0;
+                continue;
             }
             if (expected != 0 && total >= expected) {
-                complete = (total == expected);
-                break;
+                if (total == expected && Pd42s1Protocol::valid_response(response, total) && response[1] == request[1] &&
+                    response[2] == request[2]) {
+                    if (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6) {
+                        // The driver answered but rejected the command.  Report the
+                        // manual's error code (0xE1..0xE6) instead of letting it hide
+                        // behind the generic "not acknowledged" warnings.
+                        char message[64];
+                        snprintf(message, sizeof(message), "command error 0x%02X (%s)", response[3], error_code_name(response[3]));
+                        _lastErrorCode = response[3];
+                        warn_throttled(now_ms(), message);
+                        _bus->flush_receive();
+                        _bus->flush_transmit();
+                        return false;
+                    }
+                    responseLen = total;
+                    return true;
+                }
+                total = 0;
             }
         }
 
-        bool ok = false;
-        if (complete && Pd42s1Protocol::valid_response(response, total) && response[1] == request[1] && response[2] == request[2]) {
-            if (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6) {
-                // The driver answered but rejected the command.  Report the
-                // manual's error code (0xE1..0xE6) instead of letting it hide
-                // behind the generic "not acknowledged" warnings.
-                char message[64];
-                snprintf(message, sizeof(message), "command error 0x%02X (%s)", response[3], error_code_name(response[3]));
-                _lastErrorCode = response[3];
-                warn_throttled(now_ms(), message);
-            } else {
-                ok = true;
-            }
-        }
-
-        if (!ok) {
-            _bus->flush_receive();
-            _bus->flush_transmit();
-            return false;
-        }
-        responseLen = total;
-        return true;
+        _bus->flush_receive();
+        _bus->flush_transmit();
+        return false;
     }
 
     bool Pd42s1Motor::transact_retry(
@@ -363,9 +360,11 @@ namespace MotorDrivers {
             return false;
         }
 
-        // Clearing the state also clears the enable state; enable the motor
-        // again so the next sync can immediately stream positions.
-        len = Pd42s1Protocol::build_enable_command(address, true, request, sizeof(request));
+        // Clearing the state also clears the enable state.  Restore the state
+        // that was actually requested; do not silently re-enable a motor that
+        // $MD or an alarm intentionally disabled.
+        const bool clearDisable = _disableRequested;
+        len = Pd42s1Protocol::build_enable_command(address, !clearDisable, request, sizeof(request));
         if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
             !Pd42s1Protocol::parse_ack(response, responseLen)) {
             warn_throttled(now_ms(), "re-enable after clearing abnormal state failed");
@@ -375,11 +374,12 @@ namespace MotorDrivers {
         _lastErrorCode = 0;
         _readFailures  = 0;
         _writeFailures = 0;
-        _synced        = false;  // force a fresh version/position sync
-        _targetDirty   = true;
-        _disabled      = false;
-        _online        = true;
-        can_log_info("CAN: " << name() << " stall protection released (0xF9), motor re-enabled");
+        _synced      = false;  // force a fresh version/position sync
+        _targetDirty = true;
+        _disabled    = clearDisable;
+        _online      = true;
+        can_log_info("CAN: " << name() << " stall protection released (0xF9), motor "
+                             << (clearDisable ? "left disabled" : "re-enabled"));
         return true;
     }
 
@@ -461,7 +461,13 @@ namespace MotorDrivers {
             return false;
         }
 
-        len = Pd42s1Protocol::build_enable_command(address, true, request, sizeof(request));
+        // A sync must honor a disable request that was raised while the motor
+        // was out of sync (for example $MD or an alarm after a read failure).
+        // Never blindly re-enable here; use the latest requested state and
+        // preserve a request that changes while this transaction is in flight.
+        const bool     syncDisable = _disableRequested;
+        const uint32_t syncGen     = _disableGeneration;
+        len = Pd42s1Protocol::build_enable_command(address, !syncDisable, request, sizeof(request));
         if (!transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) ||
             !Pd42s1Protocol::parse_ack(response, responseLen)) {
             _writeFailures++;
@@ -484,10 +490,17 @@ namespace MotorDrivers {
         _driverPosition   = position;
         _targetDirty      = true;
         _blockTargetValid = false;
-        _disabled         = false;
-        _disablePending   = false;
-        _disableRequested = false;
-        _synced           = true;
+        if (syncGen == _disableGeneration) {
+            _disabled       = syncDisable;
+            _disablePending = false;
+        } else {
+            // A newer MD/ME request arrived during sync.  Keep the old result
+            // out of the cache and apply the newest request on the next poll.
+            _disabled       = _disableRequested;
+            _disablePending = true;
+            _nextDisableMs  = now_ms();
+        }
+        _synced = true;
         _everSynced       = true;
         _online           = true;
         _readFailures     = 0;

@@ -20,6 +20,14 @@
 
 namespace Machine {
 
+    namespace {
+        // Diagnostic reports must tolerate a slow/late driver response.  The
+        // worker still uses short timeouts, but a foreground report should not
+        // silently drop a whole address because one reply took >50 ms.
+        constexpr uint32_t DIAGNOSTIC_TIMEOUT_MS = 300;
+        constexpr int      DIAGNOSTIC_ATTEMPTS   = 3;
+    }
+
     bool    CanBus::_driver_configured      = false;
     int     CanBus::_driver_count           = 0;
     bool    CanBus::_logging_enabled        = false;
@@ -932,7 +940,6 @@ namespace Machine {
 
         const uint32_t deadline = now_ms() + timeoutMs;
         size_t         total    = 0;
-        bool           complete = false;
         while (total < responseCapacity) {
             int32_t remaining = int32_t(deadline - now_ms());
             if (remaining <= 0) {
@@ -946,26 +953,33 @@ namespace Machine {
 
             size_t expected = Pd42s1Protocol::expected_response_length(response, total);
             if (expected == SIZE_MAX) {
-                break;
+                // Not a valid frame start.  Drop it and keep looking for the
+                // response belonging to this request instead of flushing the
+                // queue and potentially discarding a good late response.
+                total = 0;
+                continue;
             }
             if (expected != 0 && total >= expected) {
-                complete = (total == expected);
-                break;
+                if (total == expected && Pd42s1Protocol::valid_response(response, total) && response[1] == request[1] &&
+                    response[2] == request[2]) {
+                    if (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6) {
+                        // Addressed command error (not a stale frame).
+                        flush_receive();
+                        flush_transmit();
+                        return false;
+                    }
+                    responseLen = total;
+                    return true;
+                }
+                // A complete but mismatched/stale frame: discard it and keep
+                // waiting until the deadline for the real response.
+                total = 0;
             }
         }
 
-        // The framing must be intact, the answer must come from the slave we
-        // addressed and carry the function code we asked for, and a 6-byte
-        // frame with a 0xE1..0xE6 status is a command error, not a success.
-        if (!complete || !Pd42s1Protocol::valid_response(response, total) || response[1] != request[1] || response[2] != request[2] ||
-            (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6)) {
-            flush_receive();
-            flush_transmit();
-            return false;
-        }
-
-        responseLen = total;
-        return true;
+        flush_receive();
+        flush_transmit();
+        return false;
     }
 
     bool CanBus::send_echo_state(bool enable) {
@@ -1336,15 +1350,16 @@ namespace Machine {
             log_info("CAN faults: bus not ready");
             return;
         }
+        _diagnostic_active.store(true, std::memory_order_release);
         Lock lock(*this);
 
         auto read_byte = [this](uint8_t address, uint8_t function, uint8_t& value) {
             uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
             uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
             size_t  len = Pd42s1Protocol::build_read_command(address, function, request, sizeof(request));
-            for (int attempt = 0; attempt < 2; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS; ++attempt) {
                 size_t responseLen = 0;
-                if (transact(request, len, response, sizeof(response), responseLen, 50) &&
+                if (transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS) &&
                     Pd42s1Protocol::parse_byte_value(response, responseLen, function, value)) {
                     return true;
                 }
@@ -1365,12 +1380,13 @@ namespace Machine {
             uint8_t firmware = 0;
             uint8_t hardware = 0;
             bool    have     = false;
-            for (int attempt = 0; attempt < 2 && !have; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS && !have; ++attempt) {
                 size_t responseLen = 0;
-                have = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                have = transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS) &&
                        Pd42s1Protocol::parse_version(response, responseLen, firmware, hardware);
             }
             if (!have) {
+                log_warn("  address " << int(address) << ": no response (version read)");
                 continue;
             }
             found++;
@@ -1389,11 +1405,12 @@ namespace Machine {
                                   << " stall=" << (stall == 0xFF ? "?" : (stall ? "YES" : "no"))
                                   << " enabled=" << (enable == 0xFF ? "?" : (enable ? "no" : "yes"))
                                   << " in-position=" << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
-            if (status >= 3 || stall == 1) {
+            if ((status != 0xFF && status >= 3) || stall == 1) {
                 abnormal++;
             }
         }
 
+        _diagnostic_active.store(false, std::memory_order_release);
         if (!found) {
             log_info("CAN faults: (no devices)");
         } else if (abnormal) {
@@ -1405,36 +1422,18 @@ namespace Machine {
 
     bool CanBus::read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-        uint8_t response[64];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  len = Pd42s1Protocol::build_read_command(address, 0x32, request, sizeof(request));
-        for (int attempt = 0; attempt < 2; ++attempt) {
-            flush_receive();
-            if (!send_message(request, len, 150)) {
-                continue;
-            }
-            // The 0x32 response is 50 bytes across several CAN frames.  Collect
-            // it directly instead of relying on transact()'s length logic.
-            size_t   total    = 0;
-            uint32_t deadline = now_ms() + 300;
-            while (total < sizeof(response)) {
-                int32_t left = int32_t(deadline - now_ms());
-                if (left <= 0) {
-                    break;
-                }
-                size_t received = receive_chunk(response + total, sizeof(response) - total, left > 50 ? 50 : uint32_t(left));
-                if (received == 0) {
-                    break;
-                }
-                total += received;
-            }
-            if (total == 50 && response[0] == 0xC5 && response[49] == 0x5C &&
-                Pd42s1Protocol::checksum(response, 48) == response[48] && response[2] == 0x32 &&
-                response[3] == Pd42s1Protocol::STATUS_OK) {
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            size_t responseLen = 0;
+            if (transact(request, len, response, sizeof(response), responseLen, 300) && responseLen == 50 &&
+                response[2] == 0x32 && response[3] == Pd42s1Protocol::STATUS_OK) {
                 mode          = response[4];
                 echo          = response[5];
                 can_baud_kbps = uint16_t((uint16_t(response[10]) << 8) | response[11]);
                 return true;
             }
+            vTaskDelay(pdMS_TO_TICKS(5));
         }
         return false;
     }
@@ -1445,6 +1444,7 @@ namespace Machine {
             log_info("CAN config: bus not ready");
             return;
         }
+        _diagnostic_active.store(true, std::memory_order_release);
         Lock lock(*this);
         int  found = 0;
         for (uint8_t address = 1; address <= MAX_CLIENTS; ++address) {
@@ -1458,8 +1458,11 @@ namespace Machine {
                 found++;
                 log_info("  address " << int(address) << ": mode=" << int(mode) << " echo=" << int(echo) << " saved-CAN-baud=" << baud
                                       << " kbps");
+            } else {
+                log_warn("  address " << int(address) << ": no response (config read)");
             }
         }
+        _diagnostic_active.store(false, std::memory_order_release);
         if (!found) {
             log_info("CAN config: (no devices)");
         }
@@ -1471,6 +1474,7 @@ namespace Machine {
             log_info("CAN positions: bus not ready");
             return;
         }
+        _diagnostic_active.store(true, std::memory_order_release);
         Lock lock(*this);
 
         int found = 0;
@@ -1485,12 +1489,13 @@ namespace Machine {
             uint8_t firmware = 0;
             uint8_t hardware = 0;
             bool    have     = false;
-            for (int attempt = 0; attempt < 2 && !have; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS && !have; ++attempt) {
                 size_t responseLen = 0;
-                have = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                have = transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS) &&
                        Pd42s1Protocol::parse_version(response, responseLen, firmware, hardware);
             }
             if (!have) {
+                log_warn("  address " << int(address) << ": no response (version read)");
                 continue;
             }
             found++;
@@ -1503,28 +1508,28 @@ namespace Machine {
             bool    hasError = false;
             bool    hasSpeed = false;
 
-            for (int attempt = 0; attempt < 2 && !hasPos; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS && !hasPos; ++attempt) {
                 size_t responseLen = 0;
                 len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
-                hasPos = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                hasPos = transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS) &&
                          Pd42s1Protocol::parse_int32_value(response, responseLen, Pd42s1Protocol::FUNC_READ_POSITION, position);
             }
-            for (int attempt = 0; attempt < 2 && !hasError; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS && !hasError; ++attempt) {
                 size_t responseLen = 0;
                 len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_POS_ERROR, request, sizeof(request));
-                hasError = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                hasError = transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS) &&
                            Pd42s1Protocol::parse_int32_value(response, responseLen, Pd42s1Protocol::FUNC_READ_POS_ERROR, error);
             }
-            for (int attempt = 0; attempt < 2 && !hasSpeed; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS && !hasSpeed; ++attempt) {
                 size_t responseLen = 0;
                 len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_SPEED, request, sizeof(request));
-                hasSpeed = transact(request, len, response, sizeof(response), responseLen, 50) &&
+                hasSpeed = transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS) &&
                            Pd42s1Protocol::parse_int16_value(response, responseLen, Pd42s1Protocol::FUNC_READ_SPEED, speed);
             }
-            for (int attempt = 0; attempt < 2 && inpos == 0xFF; ++attempt) {
+            for (int attempt = 0; attempt < DIAGNOSTIC_ATTEMPTS && inpos == 0xFF; ++attempt) {
                 size_t responseLen = 0;
                 len                = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_IN_POSITION, request, sizeof(request));
-                if (transact(request, len, response, sizeof(response), responseLen, 50)) {
+                if (transact(request, len, response, sizeof(response), responseLen, DIAGNOSTIC_TIMEOUT_MS)) {
                     Pd42s1Protocol::parse_byte_value(response, responseLen, Pd42s1Protocol::FUNC_READ_IN_POSITION, inpos);
                 }
             }
@@ -1540,6 +1545,7 @@ namespace Machine {
                                   << " error=" << errText << " speed=" << speedText << "RPM in-position="
                                   << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
         }
+        _diagnostic_active.store(false, std::memory_order_release);
         if (!found) {
             log_info("CAN positions: (no devices)");
         }
@@ -1698,18 +1704,18 @@ namespace Machine {
                     vTaskDelay(pdMS_TO_TICKS(20));
                 }
             }
-        }
-
-        if (ok) {
-            // Both cached targets and bases are stale after a driver zero.
-            // Notify every client at this address; two configured motors can
-            // share one address.
-            for (size_t i = 0; i < _n_clients; ++i) {
-                if (_clients[i] && _clients[i]->bus_address() == address) {
-                    _clients[i]->on_position_zeroed();
+            if (ok) {
+                // Make the clients unsynced before releasing the bus lock, so
+                // the worker cannot send an old absolute target between the
+                // zeroing transaction and the cache invalidation.
+                for (size_t i = 0; i < _n_clients; ++i) {
+                    if (_clients[i] && _clients[i]->bus_address() == address) {
+                        _clients[i]->on_position_zeroed();
+                    }
                 }
             }
         }
+
         can_log_info("CAN: zero position at address " << int(address) << (ok ? " ok" : " failed"));
         return ok;
     }
@@ -1859,6 +1865,15 @@ namespace Machine {
         can_log_info("CAN: broadcasting driver reset (0x02)");
         send_message(request, len, 100);
         flush_receive();
+
+        // The drivers may have lost their position/state.  Invalidate every
+        // client while the bus lock is still held, then let the normal sync
+        // path rebuild the base before any target can be sent.
+        for (size_t i = 0; i < _n_clients; ++i) {
+            if (_clients[i]) {
+                _clients[i]->on_position_zeroed();
+            }
+        }
 
         // Give the driver firmware time to boot and re-initialise its CAN
         // controller before trying to talk to it again.

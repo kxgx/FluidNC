@@ -12,7 +12,7 @@ on:
         type: string
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ inputs.version || github.ref_name }}
   cancel-in-progress: true
 
 permissions:
@@ -111,6 +111,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          ref: ${{ needs.prepare.outputs.version }}
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -164,6 +165,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.prepare.outputs.version }}
 
       - name: Download all variant artifacts
         uses: actions/download-artifact@v7
@@ -218,7 +221,7 @@ jobs:
                 SHA256SUMS
               USB/
                 firmware.factory.bin  # full image at 0x0
-                bootloader.bin        # 0x1000
+                bootloader.bin        # 0x0 on ESP32-S3
                 partitions.bin        # 0x8000
                 firmware.addrinfo
                 manifest.json
@@ -240,8 +243,10 @@ jobs:
             | `octal-oled-usb-4mb` | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb-4mb.zip` |
             | `nopsram-oled-usb-4mb` | `wifi_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `fluidcan-<tag>-nopsram-oled-usb-4mb.zip` |
 
-            The 4 MB variants use a single application slot. Their OTA README
-            warns that network OTA is not available; use the USB factory image.
+            The 4 MB variants use a single application slot. Network OTA is not
+            available; use serial `write-flash 0x10000 OTA/firmware.bin` to keep
+            the filesystem/config. USB factory is a full reinstall, not the
+            normal upgrade path.
 
             Board: ESP32-S3-WROOM-1  
             Default display: SSD1306 128x64 on i2c0 (SDA GPIO8 / SCL GPIO9, address 0x3C)  

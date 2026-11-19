@@ -1154,25 +1154,20 @@ static int bb_scan_pins(pinnum_t sda, pinnum_t scl, bool backwards) {
 #endif
 // Scan one I2C bus, in ascending or descending address order.  A zero-length
 // write is used as a probe: it transfers only the address byte, so the device
-// responds with ACK if it is present.
+// responds with ACK if it is present.  Sending a dummy 0x00 data byte would
+// corrupt write-through devices such as the PCA9545A mux control register.
 static int scan_i2c_range(objnum_t bus_number, bool backwards) {
     int     found    = 0;
     int     nack     = 0;
     int     other    = 0;
     int     firstErr = 0;
-    uint8_t probe[1] = { 0 };
     int     first    = backwards ? 0x77 : 0x03;
     int     last     = backwards ? 0x02 : 0x78;
     int     step     = backwards ? -1 : 1;
     for (int address = first; address != last; address += step) {
-        // One data byte, not a zero-length write: the Arduino Wire HAL has
-        // problems with zero-size transactions, which show up as timeouts
-        // instead of the expected ACK/NACK.
-        int rc = i2c_write(bus_number, uint8_t(address), probe, 1);
-        // i2c_write() returns the byte count on ACK, or a negative error code.
-        // The old check treated 0 as success, so a working device could still
-        // be reported as "no devices".
-        if (rc == 1 || rc == 0) {
+        int rc = i2c_write(bus_number, uint8_t(address), nullptr, 0);
+        // i2c_write() returns zero on ACK, or a negative error code.
+        if (rc == 0) {
             log_info("  I2C device at " << to_hex(uint32_t(address)));
             ++found;
         } else if (rc == -2 || rc == -3) {
@@ -1253,6 +1248,9 @@ static Error i2c_scan(const char* value, AuthenticationLevel auth_level, Channel
             bb_scan_pins(sclNum, sdaNum, false);
             log_info(" reverse:");
             bb_scan_pins(sclNum, sdaNum, true);
+            // bb_scan_pins() left the pins in open-drain GPIO mode.  Restore
+            // the hardware I2C0 controller so the OLED keeps working.
+            i2c_master_init(bus, sdaNum, sclNum, i2c->_frequency);
         }
 #endif
     }
@@ -1433,7 +1431,7 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
         while (*p && count < int(sizeof(addresses) / sizeof(addresses[0]))) {
             char*       end = nullptr;
             const long  a   = strtol(p, &end, 10);
-            if (end == p || a < 1 || a > 255) {
+            if (end == p || a < 1 || a > int(Machine::CanBus::MAX_CLIENTS)) {
                 log_info("CAN zero: invalid address list");
                 return Error::InvalidValue;
             }
@@ -1442,6 +1440,10 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
             while (*p == ',' || *p == ' ') {
                 ++p;
             }
+        }
+        if (*p) {
+            log_info("CAN zero: too many addresses (max " << int(Machine::CanBus::MAX_CLIENTS) << ")");
+            return Error::InvalidValue;
         }
     }
     int     succeeded = 0;
@@ -1453,6 +1455,9 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
         delay_ms(20);
     }
     log_info("CAN zero: acknowledged " << succeeded << "/" << count << " address(es)");
+    if (succeeded != count) {
+        return Error::InvalidValue;
+    }
     if (succeeded > 0) {
         if (config->_can->wait_for_driver_sync(zeroed, succeeded, 2000)) {
             log_info("CAN zero: drivers resynchronised");
@@ -1651,7 +1656,7 @@ void make_user_commands() {
     new ReportCommand("CI", "Channel/Info", showChannelInfo, anyState);
     new ReportCommand("CD", "Config/Dump", dump_config, anyState);
 #if MAX_N_I2C
-    new ReportCommand("I2CScan", "System/I2CScan", i2c_scan, anyState);
+    new ReportCommand("I2CScan", "System/I2CScan", i2c_scan, notIdleOrAlarm);
 #endif
 #if MAX_N_CAN
     new ReportCommand("CANScan", "System/CANScan", can_scan, notIdleOrAlarm);

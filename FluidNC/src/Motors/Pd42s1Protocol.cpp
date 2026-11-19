@@ -158,6 +158,10 @@ namespace MotorDrivers {
                 return 46;  // status + 41-byte system parameter block
             case 0x32:
                 return 50;  // status + 45-byte driver parameter block
+            case FUNC_SET_POSITION_PID:
+                return 18;  // status + 12-byte PID payload + checksum/tail/head
+            case FUNC_SET_MAX_TORQUE:
+                return 8;   // status + 2-byte current payload + framing
             case FUNC_POSITION_MODE:
                 return 6;  // status only
             default:

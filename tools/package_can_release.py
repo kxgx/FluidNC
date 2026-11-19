@@ -247,17 +247,19 @@ def stage_variant(
         image_path=usb / "firmware.factory.bin",
         offset="0x0",
         install_name="can-full",
-        install_description="完整写入 CAN 固件（factory image @ 0x0）",
-        erase=True,
+        install_description="完整刷写应用区（factory image @ 0x0，不主动擦除整片）",
+        erase=False,
     )
     write_text(ota / "manifest.json", json.dumps(ota_manifest, ensure_ascii=False, indent=2) + "\n")
     write_text(usb / "manifest.json", json.dumps(usb_manifest, ensure_ascii=False, indent=2) + "\n")
 
     no_ota = variant["flash"] == "4 MB"
     ota_note = (
-        "此 4 MB 变体只有单个 app 分区，不能做网络 OTA；请使用 USB/factory 刷写。"
+        "此 4 MB 变体只有单个 app 分区，不能做网络 OTA。\n"
+        "应用更新请用串口写 OTA/firmware.bin 到 0x10000（保留配置）；\n"
+        "USB/factory 仅用于完整重装，不要用它代替普通升级。"
         if no_ota
-        else "使用 firmware.bin（0x10000）做 OTA；不要用 factory image 覆盖分区。"
+        else "使用 firmware.bin（0x10000）做应用区 OTA；不要用 factory image 覆盖 bootloader/partitions。"
     )
     write_text(
         ota / "README.txt",
@@ -278,13 +280,18 @@ OTA 文件：
         usb / "README.txt",
         f"""FluidCAN {tag} - {label}
 
-USB 完整刷写文件：
+USB 完整刷写文件（ESP32-S3）：
   firmware.factory.bin  完整镜像，偏移 0x0
-  bootloader.bin        偏移 0x1000
+  bootloader.bin        偏移 0x0（ESP32-S3 不是 0x1000）
   partitions.bin        偏移 0x8000
   firmware.addrinfo     调试符号地址信息
-  manifest.json         完整安装元数据
+  manifest.json         完整安装元数据（不主动 erase 整片）
   SHA256SUMS            文件校验
+
+注意：
+  - 普通升级优先用 OTA/firmware.bin 写 0x10000，保留配置。
+  - factory 是完整重装镜像；如果手动执行 erase，NVS/LittleFS 中的配置会被清空。
+  - 本目录 manifest 使用 erase=false；需要彻底清空时请先备份配置。
 
 ESP32-S3 参数：Flash {variant['flash']}, PSRAM {variant['psram']}, OLED {variant['oled']}, USB {variant['usb']}
 """,

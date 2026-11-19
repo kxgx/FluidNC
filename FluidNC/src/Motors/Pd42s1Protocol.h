@@ -63,7 +63,7 @@ namespace MotorDrivers {
         static constexpr uint8_t FUNC_ZERO_POSITION    = 0xF8;  // zero current position
         static constexpr uint8_t FUNC_POSITION_MODE    = 0xF2;
 
-        static constexpr size_t MAX_FRAME_LEN = 32;
+        static constexpr size_t MAX_FRAME_LEN = 64;
 
         // Low 8 bits of the sum of data[0..len-1].
         static uint8_t checksum(const uint8_t* data, size_t len);
