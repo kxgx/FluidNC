@@ -27,7 +27,7 @@
 
 #if MAX_N_CAN
 static void execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
-    auto* can = config ? config->_can : nullptr;
+    auto* can = (config && config->_can) ? config->_can->driver() : nullptr;
     if (!can) {
         log_info("CAN: no can: section configured");
         return;
@@ -482,6 +482,18 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
 
     // Step 0 - remove whitespace and comments and convert to upper case
     collapseGCode(line);
+
+    // LumenPnP compatibility commands.  These are handled before the normal
+    // parser because Marlin uses words (notably U for green) and command
+    // semantics that conflict with FluidNC's CAN diagnostic M-codes.
+    if (config && config->_lumenCompat && config->_lumenCompat->configured()) {
+        config->_lumenCompat->preprocessLine(line, sizeof(line));
+        bool  lumenHandled = false;
+        Error lumenError   = config->_lumenCompat->executeLine(line, channel, lumenHandled);
+        if (lumenHandled) {
+            return lumenError;
+        }
+    }
 
     /* -------------------------------------------------------------------------------------
        STEP 1: Initialize parser block struct and copy current g-code state modes. The parser
@@ -979,7 +991,10 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
                         mg_word_bit    = ModalGroup::MM11;
                         break;
 #if MAX_N_CAN
-                    // M150..M160: CAN diagnostic/control commands.
+                    // M150..M161: CAN diagnostic/control commands.
+                    // M150 is intercepted by LumenCompat as the LED command
+                    // when a lumen: section is configured; otherwise it keeps
+                    // the old CAN-scan behavior for existing CAN-only users.
                     // 150 scan, 151 scan all bauds, 152 bus status,
                     // 153 driver faults, 154 driver positions,
                     // 155 release stall, 156 echo on, 157 immediate stop,
@@ -1933,7 +1948,9 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
         }
     }
 #if MAX_N_CAN
-    // M150..M159 are immediate CAN commands; they do not involve motion.
+    // M150..M161 are immediate CAN commands; they do not involve motion.
+    // M150 is only reached here when no lumen: section is configured; with
+    // LumenCompat active it is consumed as the LED command before parsing.
     if (gc_block.can_mcode) {
         const uint8_t code = gc_block.can_mcode;
         const int32_t p    = int32_t(gc_block.values.p);

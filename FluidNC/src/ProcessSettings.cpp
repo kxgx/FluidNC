@@ -1273,14 +1273,14 @@ static Error can_scan(const char* value, AuthenticationLevel auth_level, Channel
     }
     if (value && *value) {
         if (string_util::equal_ignore_case(value, "all")) {
-            config->_can->scan_all_bauds();
+            config->_can->driver()->scan_all_bauds();
         } else {
             log_info("CAN scan: unknown option '" << value << "' (only 'all' is supported)");
             return Error::InvalidValue;
         }
         return Error::Ok;
     }
-    config->_can->scan();
+    config->_can->driver()->scan();
     return Error::Ok;
 }
 
@@ -1289,7 +1289,7 @@ static Error can_echo_on(const char* value, AuthenticationLevel auth_level, Chan
         log_info("CAN echo: no can: section configured");
         return Error::Ok;
     }
-    config->_can->enable_all_driver_echo();
+    config->_can->driver()->enable_all_driver_echo();
     return Error::Ok;
 }
 
@@ -1298,7 +1298,7 @@ static Error can_status(const char* value, AuthenticationLevel auth_level, Chann
         log_info("CAN status: no can: section configured");
         return Error::Ok;
     }
-    config->_can->report_status();
+    config->_can->driver()->report_status();
     return Error::Ok;
 }
 
@@ -1307,7 +1307,7 @@ static Error can_clear(const char* value, AuthenticationLevel auth_level, Channe
         log_info("CAN clear: no can: section configured");
         return Error::Ok;
     }
-    config->_can->clear_driver_faults();
+    config->_can->driver()->clear_driver_faults();
     return Error::Ok;
 }
 
@@ -1316,7 +1316,7 @@ static Error can_reset(const char* value, AuthenticationLevel auth_level, Channe
         log_info("CAN reset: no can: section configured");
         return Error::Ok;
     }
-    config->_can->restart_drivers();
+    config->_can->driver()->restart_drivers();
     return Error::Ok;
 }
 
@@ -1339,7 +1339,7 @@ static Error can_enable(const char* value, AuthenticationLevel auth_level, Chann
         log_info("CAN enable: invalid address (1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
         return Error::InvalidValue;
     }
-    if (!config->_can->set_driver_enable(uint8_t(address), true)) {
+    if (!config->_can->driver()->set_driver_enable(uint8_t(address), true)) {
         log_info("CAN enable: failed");
         return Error::InvalidValue;
     }
@@ -1371,7 +1371,7 @@ static Error can_move(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN move: invalid address/delta (address 1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
         return Error::InvalidValue;
     }
-    if (!config->_can->send_single_position(uint8_t(address), int32_t(delta), 100, 50)) {
+    if (!config->_can->driver()->send_single_position(uint8_t(address), int32_t(delta), 100, 50)) {
         log_info("CAN move: failed");
         return Error::InvalidValue;
     }
@@ -1404,7 +1404,7 @@ static Error can_group(const char* value, AuthenticationLevel auth_level, Channe
         log_info("CAN group: invalid slave/group address (slave 1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
         return Error::InvalidValue;
     }
-    if (!config->_can->set_group_address(uint8_t(slave), uint8_t(group))) {
+    if (!config->_can->driver()->set_group_address(uint8_t(slave), uint8_t(group))) {
         log_info("CAN group: failed");
         return Error::InvalidValue;
     }
@@ -1422,7 +1422,7 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
         return Error::InvalidValue;
     }
     uint8_t addresses[Machine::CanBus::MAX_CLIENTS];
-    int     count = int(config->_can->client_addresses(addresses, Machine::CanBus::MAX_CLIENTS));
+    int     count = int(config->_can->driver()->client_addresses(addresses, Machine::CanBus::MAX_CLIENTS));
     if (!count) {
         // Discovery fallback for a machine with no configured PD42S1 clients.
         count = 4;
@@ -1454,7 +1454,7 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
     int     succeeded = 0;
     uint8_t zeroed[Machine::CanBus::MAX_CLIENTS];
     for (int i = 0; i < count; ++i) {
-        if (config->_can->zero_driver_position(addresses[i])) {
+        if (config->_can->driver()->zero_driver_position(addresses[i])) {
             zeroed[succeeded++] = addresses[i];
         }
         delay_ms(20);
@@ -1464,7 +1464,7 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
         return Error::InvalidValue;
     }
     if (succeeded > 0) {
-        if (config->_can->wait_for_driver_sync(zeroed, succeeded, 2000)) {
+        if (config->_can->driver()->wait_for_driver_sync(zeroed, succeeded, 2000)) {
             log_info("CAN zero: drivers resynchronised");
         } else {
             log_info("CAN zero: timeout waiting for driver resync");
@@ -1479,7 +1479,7 @@ static Error can_faults(const char* value, AuthenticationLevel auth_level, Chann
         log_info("CAN faults: no can: section configured");
         return Error::Ok;
     }
-    config->_can->report_driver_faults();
+    config->_can->driver()->report_driver_faults();
     return Error::Ok;
 }
 
@@ -1488,7 +1488,7 @@ static Error can_pos(const char* value, AuthenticationLevel auth_level, Channel&
         log_info("CAN positions: no can: section configured");
         return Error::Ok;
     }
-    config->_can->report_driver_positions();
+    config->_can->driver()->report_driver_positions();
     return Error::Ok;
 }
 
@@ -1497,7 +1497,7 @@ static Error can_stop(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN stop: no can: section configured");
         return Error::Ok;
     }
-    if (!config->_can->stop_all_drivers()) {
+    if (!config->_can->driver()->stop_all_drivers()) {
         log_info("CAN stop: not all drivers verified disabled; bus remains latched");
         return Error::InvalidValue;
     }
@@ -1532,7 +1532,7 @@ static Error can_read(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN read: address must be 1..255 and function 0..255");
         return Error::InvalidValue;
     }
-    config->_can->read_raw(uint8_t(addr), uint8_t(func));
+    config->_can->driver()->read_raw(uint8_t(addr), uint8_t(func));
     return Error::Ok;
 }
 
@@ -1541,7 +1541,7 @@ static Error can_auto_config(const char* value, AuthenticationLevel auth_level, 
         log_info("CAN auto-config: no can: section configured");
         return Error::Ok;
     }
-    config->_can->run_auto_config();
+    config->_can->driver()->run_auto_config();
     return Error::Ok;
 }
 
@@ -1550,7 +1550,7 @@ static Error can_driver_info(const char* value, AuthenticationLevel auth_level, 
         log_info("CAN driver info: no can: section configured");
         return Error::Ok;
     }
-    config->_can->report_driver_configs();
+    config->_can->driver()->report_driver_configs();
     return Error::Ok;
 }
 
@@ -1591,7 +1591,7 @@ static Error can_sweep(const char* value, AuthenticationLevel auth_level, Channe
     constexpr size_t      N            = sizeof(candidates) / sizeof(candidates[0]);
 
     log_info("CAN sweep: probing " << N << " candidate pins for a transceiver D/R loopback");
-    config->_can->suspend();
+    config->_can->driver()->suspend();
 
     for (size_t i = 0; i < N; ++i) {
         pinMode(candidates[i], INPUT_PULLUP);
@@ -1642,7 +1642,7 @@ static Error can_sweep(const char* value, AuthenticationLevel auth_level, Channe
     if (!found) {
         log_info("CAN sweep: no transceiver detected on the candidate pins");
     }
-    config->_can->resume();
+    config->_can->driver()->resume();
     return Error::Ok;
 }
 #    endif

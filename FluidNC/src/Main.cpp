@@ -130,6 +130,10 @@ void setup() {
 
         config->_userInputs->init();
 
+        if (config->_lumenCompat) {
+            config->_lumenCompat->init();
+        }
+
         Axes::init();
 
         config->_control->init();

@@ -6,6 +6,7 @@
 #if MAX_N_CAN
 
 #    include "CanBus.h"
+#    include "CanDriverRegistry.h"
 
 #    include "Logging.h"
 #    include "Motors/Pd42s1Protocol.h"
@@ -48,6 +49,32 @@ namespace Machine {
     }
 
     using MotorDrivers::Pd42s1Protocol;
+
+    namespace {
+        // pd42s1 is still the in-place CanBus implementation.  The registry
+        // returns the same object so existing PD42S1 code and lifetime rules
+        // remain unchanged; a future vendor can return a standalone object.
+        CanDriverRegistration _pd42s1Registration("pd42s1", [](CanBus* bus) -> CanDriver* { return static_cast<CanDriver*>(bus); });
+    }
+
+    CanDriver* CanBus::driver() {
+        if (_driver && _resolvedDriverName == _driverName) {
+            return _driver;
+        }
+        if (_ownsDriver) {
+            delete _driver;
+        }
+        _driver     = CanDriverRegistry::create(_driverName.c_str(), this);
+        _ownsDriver = _driver != nullptr && _driver != this;
+        if (!_driver) {
+            // Keep the command layer's non-null invariant.  validate() turns
+            // an unknown name into a configuration error before use.
+            _driver     = this;
+            _ownsDriver = false;
+        }
+        _resolvedDriverName = _driverName;
+        return _driver;
+    }
 
     namespace {
         uint32_t now_ms() {
@@ -122,6 +149,13 @@ namespace Machine {
     }
 
     void CanBus::group(Configuration::HandlerBase& handler) {
+        // @config driver
+        // @default pd42s1
+        // CAN motor protocol.  The command layer talks to this selection only
+        // through CanDriver; adding a vendor means adding a CanDriver
+        // implementation rather than editing GCode/ProcessSettings.
+        handler.item("driver", _driverName);
+
         // @config tx_pin
         // @default NO_PIN
         // @pin_attributes output
@@ -170,6 +204,14 @@ namespace Machine {
     }
 
     void CanBus::validate() {
+        if (!CanDriverRegistry::known(_driverName.c_str())) {
+            log_error("Unknown can.driver '" << _driverName << "'; supported: " << CanDriverRegistry::names());
+            Assert(false, "unknown can.driver");
+        }
+        CanDriver* selected = driver();
+        if (!selected->uses_transport()) {
+            return;
+        }
         if (!configured()) {
             return;  // A CAN motor driver will report the missing bus.
         }
@@ -186,6 +228,11 @@ namespace Machine {
     }
 
     void CanBus::init() {
+        CanDriver* selected = driver();
+        if (selected && !selected->uses_transport()) {
+            can_log_info("CAN: driver '" << selected->driver_name() << "' selected; TWAI transport not used");
+            return;
+        }
         if (!_driver_configured) {
             can_log_verbose("CAN: no PD42S1 motor configured; CAN disabled");
             return;
@@ -2068,6 +2115,11 @@ namespace Machine {
             twai_stop();
             twai_driver_uninstall();
             _ready = false;
+        }
+        if (_ownsDriver) {
+            delete _driver;
+            _driver     = nullptr;
+            _ownsDriver = false;
         }
         if (_bus_mutex) {
             vSemaphoreDelete(_bus_mutex);

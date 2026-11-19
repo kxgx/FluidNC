@@ -97,6 +97,7 @@ namespace Machine {
 
         handler.section("user_outputs", _userOutputs);
         handler.section("user_inputs", _userInputs);
+        handler.section("lumen", _lumenCompat);
 
         ConfigurableModuleFactory::factory(handler);
         ATCs::ATCFactory::factory(handler);
@@ -190,6 +191,10 @@ namespace Machine {
 
         if (_userInputs == nullptr) {
             _userInputs = new UserInputs();
+        }
+
+        if (_lumenCompat == nullptr) {
+            _lumenCompat = new LumenCompat();
         }
 
 #if MAX_N_SDCARD
@@ -393,5 +398,7 @@ namespace Machine {
 #endif
         delete _control;
         delete _macros;
+        delete _lumenCompat;
+        _lumenCompat = nullptr;
     }
 }

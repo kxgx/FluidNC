@@ -298,7 +298,7 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 
 | M-code | Action |
 | --- | --- |
-| M150 | CAN scan (transceiver/TWAI + version read of configured addresses 1..16) |
+| M150 | LED command when a `lumen:` section is configured; otherwise legacy CAN scan (`$CANScan`) |
 | M151 | multi-baud recovery scan (`$CANScan=all`) |
 | M152 | bus status (`$CANStatus`) |
 | M153 | per-driver status/stall/enable/in-position (`$CANFaults`) |
@@ -311,9 +311,11 @@ log `no PD42S1 motor configured`.  The same functions are also available as
 | M160 | run CAN bit-rate/echo auto-configuration |
 | M161 | display saved driver parameters (0x32: mode/echo/CAN baud) |
 
-M150..M159 use the reserved M100..M199 user-code modal group.  They return
+M150..M161 use the reserved M100..M199 user-code modal group.  They return
 `ok` immediately after the CAN operation; do not combine them with motion
-words in the same block.
+words in the same block.  With LumenPnP compatibility enabled (`lumen:`
+configured), M150 is consumed as the camera-light command instead, and
+`$CANScan` is the supported scan entry point.
 ## Position-loop tuning
 
 Two optional per-driver settings are written during the CAN sync sequence:

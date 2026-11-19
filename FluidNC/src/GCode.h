@@ -343,7 +343,7 @@ struct parser_block_t {
     gc_modal_t   modal;
     gc_values_t  values;
     GCodeCoolant coolant;
-    uint8_t      can_mcode = 0;  // M150..M159 CAN diagnostic commands
+    uint8_t      can_mcode = 0;  // M150..M161 CAN diagnostic commands (M150 only when no lumen: section)
 };
 
 enum class AxisCommand : uint8_t {

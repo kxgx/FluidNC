@@ -35,6 +35,7 @@
 #include "I2CBus.h"
 #include "I2SOBus.h"
 #include "CanBus.h"
+#include "LumenCompat/LumenCompat.h"
 #include "UserOutputs.h"
 #include "UserInputs.h"
 #include "Macros.h"
@@ -108,6 +109,7 @@ namespace Machine {
         Control*        _control     = nullptr;
         UserOutputs*    _userOutputs = nullptr;
         UserInputs*     _userInputs  = nullptr;
+        LumenCompat*    _lumenCompat = nullptr;
         SDCard*         _sdCard      = nullptr;
 #if MAX_N_ETH
         EthPhy* _ethernet = nullptr;

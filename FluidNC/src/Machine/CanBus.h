@@ -21,11 +21,13 @@
 #if MAX_N_CAN
 
 #    include "Configuration/Configurable.h"
+#    include "CanDriver.h"
 #    include "Pin.h"
 
 #    include <atomic>
 #    include <cstddef>
 #    include <cstdint>
+#    include <string>
 #    include <freertos/FreeRTOS.h>
 #    include <freertos/semphr.h>
 #    include <freertos/task.h>
@@ -60,11 +62,18 @@ namespace Machine {
         virtual ~CanBusClient() = default;
     };
 
-    class CanBus : public Configuration::Configurable {
+    class CanBus : public Configuration::Configurable, public CanDriver {
     public:
         CanBus() = default;
 
         static constexpr size_t MAX_CLIENTS = 16;
+
+        // Command-layer view.  Future CAN drivers implement CanDriver and can
+        // be selected without changing GCode.cpp/ProcessSettings.cpp.
+        CanDriver*  driver();
+        const char* driver_name() const override {
+            return (_driver && _driver != this) ? _driver->driver_name() : _driverName.c_str();
+        }
 
         // PD42S1 manual section 4.1 item 7: two complete instructions must be
         // at least this far apart so the driver can finish parsing the first
@@ -297,6 +306,11 @@ namespace Machine {
         void        worker();
         static void worker_entry(void* arg);
         bool        stop_worker();
+
+        std::string _driverName = "pd42s1";
+        CanDriver*  _driver           = nullptr;
+        bool        _ownsDriver       = false;
+        std::string _resolvedDriverName;
 
         Pin      _tx;
         Pin      _rx;
