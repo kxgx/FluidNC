@@ -692,6 +692,15 @@ namespace Machine {
         }
     }
 
+    bool CanBus::has_client(uint8_t address) const {
+        for (size_t i = 0; i < _n_clients; ++i) {
+            if (_clients[i] && _clients[i]->bus_address() == address) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     void CanBus::inhibit_control(const char* reason) {
         _inhibited      = true;
         _inhibit_reason = reason;
@@ -1247,6 +1256,9 @@ namespace Machine {
         int found    = 0;
         int abnormal = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
+            if (!has_client(address)) {
+                continue;
+            }
             uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
             uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
             size_t  len = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));
@@ -1337,6 +1349,9 @@ namespace Machine {
         Lock lock(*this);
         int  found = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
+            if (!has_client(address)) {
+                continue;
+            }
             uint16_t baud = 0;
             uint8_t  echo = 0;
             uint8_t  mode = 0;
@@ -1361,6 +1376,9 @@ namespace Machine {
 
         int found = 0;
         for (uint8_t address = 1; address <= 8; ++address) {
+            if (!has_client(address)) {
+                continue;
+            }
             uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
             uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
             size_t  len = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_VERSION, request, sizeof(request));

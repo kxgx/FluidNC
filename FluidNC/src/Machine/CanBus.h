@@ -263,6 +263,7 @@ namespace Machine {
         bool        switch_driver_baud_retry(uint8_t address, uint32_t oldBaud, uint32_t newBaud);
         bool        probe_address_quiet(uint8_t address, uint8_t& firmware, uint8_t& hardware, uint32_t timeout_ms, int attempts);
         bool        read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode);
+        bool        has_client(uint8_t address) const;
         void        set_echo_to_address_locked(uint8_t address, bool enable);
         void        disable_all_driver_echo_locked();
         bool        send_echo_state(bool enable);          // caller must hold the Lock
