@@ -52,6 +52,11 @@ namespace Machine {
         // send another absolute target.
         virtual void on_position_zeroed() {}
 
+        // A foreground diagnostic report just released the bus.  Clients can
+        // defer their next background status poll so the worker does not
+        // immediately stack a backlog of polls on top of the report tail.
+        virtual void on_diagnostic_complete() {}
+
         virtual ~CanBusClient() = default;
     };
 
@@ -278,6 +283,7 @@ namespace Machine {
         bool        probe_address_quiet(uint8_t address, uint8_t& firmware, uint8_t& hardware, uint32_t timeout_ms, int attempts);
         bool        read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode);
         bool        has_client(uint8_t address) const;
+        void        notify_diagnostic_complete();
         void        set_echo_to_address_locked(uint8_t address, bool enable);
         void        disable_all_driver_echo_locked();
         bool        send_echo_state(bool enable);          // caller must hold the Lock
@@ -310,6 +316,7 @@ namespace Machine {
         bool              _auto_config_ok = false;
         bool              _stop_latched   = false;
         std::atomic<bool> _diagnostic_active{ false };
+        volatile bool     _worker_busy    = false;
         SemaphoreHandle_t _bus_mutex      = nullptr;
         SemaphoreHandle_t _list_mutex     = nullptr;
         TaskHandle_t      _task_handle    = nullptr;

@@ -745,6 +745,14 @@ namespace Machine {
         return false;
     }
 
+    void CanBus::notify_diagnostic_complete() {
+        for (size_t i = 0; i < _n_clients; ++i) {
+            if (_clients[i]) {
+                _clients[i]->on_diagnostic_complete();
+            }
+        }
+    }
+
     size_t CanBus::client_addresses(uint8_t* out, size_t max) const {
         size_t count = 0;
         for (size_t i = 0; i < _n_clients && count < max; ++i) {
@@ -1441,6 +1449,7 @@ namespace Machine {
         }
 
         _diagnostic_active.store(false, std::memory_order_release);
+        notify_diagnostic_complete();
         if (!found) {
             log_info("CAN faults: (no devices)");
         } else if (abnormal) {
@@ -1493,6 +1502,7 @@ namespace Machine {
             }
         }
         _diagnostic_active.store(false, std::memory_order_release);
+        notify_diagnostic_complete();
         if (!found) {
             log_info("CAN config: (no devices)");
         }
@@ -1576,13 +1586,14 @@ namespace Machine {
                                   << (inpos == 0xFF ? "?" : (inpos ? "yes" : "no")));
         }
         _diagnostic_active.store(false, std::memory_order_release);
+        notify_diagnostic_complete();
         if (!found) {
             log_info("CAN positions: (no devices)");
         }
     }
 
     bool CanBus::set_driver_enable(uint8_t address, bool enable) {
-        if (!_ready) {
+        if (!_ready || (_stop_latched && enable)) {
             return false;
         }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1625,7 +1636,7 @@ namespace Machine {
     }
 
     bool CanBus::set_group_address(uint8_t address, uint8_t group) {
-        if (!_ready || group == 0 || address == group) {
+        if (!_ready || _stop_latched || group == 0 || address == group) {
             return false;
         }
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
@@ -1682,7 +1693,7 @@ namespace Machine {
     }
 
     bool CanBus::send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel) {
-        if (!_ready) {
+        if (!_ready || _stop_latched) {
             return false;
         }
         int32_t current = 0;
@@ -1783,6 +1794,12 @@ namespace Machine {
             return;
         }
         _stop_latched = true;
+        // Let a worker pass that already passed the latch check finish its
+        // current poll.  Only then take the bus lock, otherwise that pass can
+        // re-enable a motor after the addressed disable below.
+        for (int i = 0; i < 500 && _worker_busy && !_task_exited; ++i) {
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
         Lock lock(*this);
 
         // Safe stop = disable all motor outputs.  The 0xFC immediate-brake
@@ -1802,15 +1819,30 @@ namespace Machine {
         int disabled = 0;
         for (size_t i = 0; i < count; ++i) {
             uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
-            size_t  len = Pd42s1Protocol::build_enable_command(addresses[i], false, request, sizeof(request));
-            for (int attempt = 0; attempt < 2; ++attempt) {
-                uint8_t response[16];
-                size_t  responseLen = 0;
-                if (transact(request, len, response, sizeof(response), responseLen, 150) &&
-                    Pd42s1Protocol::parse_ack(response, responseLen)) {
-                    ++disabled;
-                    break;
+            uint8_t response[16];
+            bool    off = false;
+            for (int attempt = 0; attempt < 5 && !off; ++attempt) {
+                size_t len = Pd42s1Protocol::build_enable_command(addresses[i], false, request, sizeof(request));
+                size_t responseLen = 0;
+                if (!transact(request, len, response, sizeof(response), responseLen, 300) ||
+                    !Pd42s1Protocol::parse_ack(response, responseLen)) {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                    continue;
                 }
+                // Verify the actual enable state, not only the ACK.
+                len = Pd42s1Protocol::build_read_command(addresses[i], Pd42s1Protocol::FUNC_READ_ENABLE, request, sizeof(request));
+                uint8_t state = 0xFF;
+                responseLen = 0;
+                if (transact(request, len, response, sizeof(response), responseLen, 300) &&
+                    Pd42s1Protocol::parse_byte_value(response, responseLen, Pd42s1Protocol::FUNC_READ_ENABLE, state) &&
+                    state == 1) {
+                    off = true;
+                } else {
+                    vTaskDelay(pdMS_TO_TICKS(10));
+                }
+            }
+            if (off) {
+                ++disabled;
             }
         }
         can_log_warn("CAN: safe stop: addressed motor disable acknowledged by " << disabled << "/" << count
@@ -1912,7 +1944,11 @@ namespace Machine {
             return;
         }
         can_log_info("CAN: broadcasting driver reset (0x02)");
-        send_message(request, len, 100);
+        if (!send_message(request, len, 100)) {
+            can_log_error("CAN: driver reset transmit failed; keeping control latched");
+            flush_receive();
+            return;
+        }
         flush_receive();
 
         // The drivers may have lost their position/state.  Invalidate every
@@ -1963,11 +1999,13 @@ namespace Machine {
             xSemaphoreGive(_list_mutex);
 
             if (!_inhibited && !_stop_latched) {
+                _worker_busy = true;
                 for (size_t i = 0; i < count; ++i) {
                     if (snapshot[i]) {
                         snapshot[i]->can_poll(now);
                     }
                 }
+                _worker_busy = false;
             } else {
                 vTaskDelay(pdMS_TO_TICKS(20));
             }

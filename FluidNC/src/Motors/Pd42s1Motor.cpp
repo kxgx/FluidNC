@@ -115,7 +115,7 @@ namespace MotorDrivers {
     }
 
     namespace {
-        constexpr uint32_t TRANSACTION_TIMEOUT_MS = 50;
+        constexpr uint32_t TRANSACTION_TIMEOUT_MS = 300;
         constexpr uint32_t RETRY_MS               = 500;
         constexpr uint32_t WARN_INTERVAL_MS       = 5000;
         constexpr uint32_t POSITION_UNITS_PER_REV = 51200;
@@ -669,7 +669,7 @@ namespace MotorDrivers {
             _online = false;
             _readFailures++;
             warn_throttled(now_ms(), "position readback failed");
-            if (_readFailures >= 3) {
+            if (_readFailures >= 5) {
                 _readFailures = 0;
                 _synced       = false;  // resync (and re-enable echo) after repeated failures
                 report_driver_fault("position readback failed");
@@ -771,6 +771,13 @@ namespace MotorDrivers {
         _blockTargetValid = false;
     }
 
+    void Pd42s1Motor::on_diagnostic_complete() {
+        // Do not immediately consume an overdue background poll right after a
+        // long diagnostic report; that creates tail collisions and false
+        // readback failures.  Schedule the next poll one full interval out.
+        _nextStatusMs = now_ms() + _statusPollMs;
+    }
+
     void Pd42s1Motor::set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) {
         if (!_blockTargets) {
             return;
@@ -868,6 +875,10 @@ namespace MotorDrivers {
         if (!_bus || !_bus->ready()) {
             return;
         }
+        if (_bus->stop_latched()) {
+            // $CANStop is latched: no sync, no target, no re-enable.
+            return;
+        }
 
         if (!_synced) {
             if (int32_t(nowMs - _nextSyncMs) < 0) {
@@ -890,6 +901,11 @@ namespace MotorDrivers {
 
         if (_disablePending) {
             apply_disable(nowMs);
+            if (_disablePending) {
+                // Fail safe: never stream a target while a disable/enable
+                // transaction is still pending.
+                return;
+            }
         }
 
         if (!_disabled) {

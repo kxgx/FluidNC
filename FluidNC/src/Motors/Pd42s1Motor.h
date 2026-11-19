@@ -43,6 +43,7 @@ namespace MotorDrivers {
         uint8_t bus_address() const override { return uint8_t(_address); }
         bool    is_synced() const override { return _synced; }
         void    on_position_zeroed() override;
+        void    on_diagnostic_complete() override;
         void    set_axis(axis_t axis) override { _axis = axis; }
         void    set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) override;
         void    stop_motion() override;
