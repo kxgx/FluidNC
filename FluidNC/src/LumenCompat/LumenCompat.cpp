@@ -14,13 +14,6 @@
 #include "Machine/MachineConfig.h"
 #include "Machine/UserOutputs.h"
 
-#if defined(ESP32)
-#    include <soc/soc_caps.h>
-#    if SOC_RMT_SUPPORTED
-#        include "esp32-hal-rgb-led.h"
-#    endif
-#endif
-
 #include <ctype.h>
 #include <cstdio>
 #include <cstring>
@@ -164,45 +157,6 @@ namespace Machine {
                 log_info("LumenCompat: ignored A/B words (no A/B axes configured)");
             }
         }
-    }
-
-    void LumenCompat::probe(bool top, bool bottom, bool on) {
-#if defined(ESP32) && SOC_RMT_SUPPORTED
-        const uint8_t value = on ? 255 : 0;
-        if (top && _topPin.defined()) {
-            rgbLedWrite(uint8_t(_topPin.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output)), value, value, value);
-        }
-        if (bottom && _bottomPin.defined()) {
-            rgbLedWrite(uint8_t(_bottomPin.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output)), value, value, value);
-        }
-#else
-        (void)top;
-        (void)bottom;
-        (void)on;
-#endif
-    }
-
-    void LumenCompat::setStatic(bool top, bool bottom, bool high) {
-#if defined(ESP32)
-        auto apply = [&](const Pin& pin) {
-            if (!pin.defined()) {
-                return;
-            }
-            auto native = pin.getNative(Pin::Capabilities::Native | Pin::Capabilities::Output);
-            pinMode(native, OUTPUT);
-            digitalWrite(native, high ? HIGH : LOW);
-        };
-        if (top) {
-            apply(_topPin);
-        }
-        if (bottom) {
-            apply(_bottomPin);
-        }
-#else
-        (void)top;
-        (void)bottom;
-        (void)high;
-#endif
     }
 
     Error LumenCompat::executeLine(const char* line, Channel& channel, bool& handled) {

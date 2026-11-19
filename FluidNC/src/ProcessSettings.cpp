@@ -1574,61 +1574,6 @@ static Error can_log(const char* value, AuthenticationLevel auth_level, Channel&
     return Error::Ok;
 }
 
-static Error led_probe(const char* value, AuthenticationLevel auth_level, Channel& out) {
-    if (!config->_lumenCompat) {
-        log_info("LED probe: lumen compatibility layer is not configured");
-        return Error::InvalidValue;
-    }
-    bool top = true, bottom = true, on = true;
-    if (value && *value) {
-        if (string_util::equal_ignore_case(value, "top")) {
-            top = true; bottom = false;
-        } else if (string_util::equal_ignore_case(value, "bottom")) {
-            top = false; bottom = true;
-        } else if (string_util::equal_ignore_case(value, "both")) {
-            top = bottom = true;
-        } else if (string_util::equal_ignore_case(value, "off")) {
-            on = false;
-        } else {
-            log_info("LED probe: usage $LEDProbe=top|bottom|both|off");
-            return Error::InvalidValue;
-        }
-    }
-    config->_lumenCompat->probe(top, bottom, on);
-    log_info("LED probe: " << (on ? "on" : "off") << " top=" << top << " bottom=" << bottom);
-    return Error::Ok;
-}
-
-static Error led_static(const char* value, AuthenticationLevel auth_level, Channel& out) {
-    if (!config->_lumenCompat || !config->_lumenCompat->configured()) {
-        log_info("LED static: lumen compatibility layer is not configured");
-        return Error::InvalidValue;
-    }
-    bool top = true, bottom = true, high = true;
-    if (value && *value) {
-        if (string_util::equal_ignore_case(value, "top")) {
-            top = true; bottom = false;
-        } else if (string_util::equal_ignore_case(value, "bottom")) {
-            top = false; bottom = true;
-        } else if (string_util::equal_ignore_case(value, "both")) {
-            top = bottom = true;
-        } else if (string_util::equal_ignore_case(value, "off")) {
-            high = false;
-        } else {
-            log_info("LED static: usage $LEDStatic=top|bottom|both|off");
-            return Error::InvalidValue;
-        }
-    }
-    // Always drive both pins to a known level first, so switching from top to
-    // bottom does not leave the previous line high.
-    config->_lumenCompat->setStatic(true, true, false);
-    if (high) {
-        config->_lumenCompat->setStatic(top, bottom, true);
-    }
-    log_info("LED static: pin level " << (high ? "high" : "low") << " top=" << top << " bottom=" << bottom);
-    return Error::Ok;
-}
-
 #    if defined(ESP32)
 // Brute-force search for a CAN transceiver: for every candidate pin, pull it
 // low and watch every other candidate pin.  A transceiver's R output follows
@@ -1738,8 +1683,6 @@ void make_user_commands() {
     new ReportCommand("CANAutoConfig", "System/CANAutoConfig", can_auto_config, notIdleOrAlarm);
     new ReportCommand("CANDriverInfo", "System/CANDriverInfo", can_driver_info, notIdleOrAlarm);
     new ReportCommand("CANLog", "System/CANLog", can_log, anyState);
-    new UserCommand("LEDProbe", "System/LEDProbe", led_probe, anyState);
-    new UserCommand("LEDStatic", "System/LEDStatic", led_static, anyState);
 #    if defined(ESP32)
     // CANSweep is a bring-up-only probe that drives arbitrary GPIOs.  On this
     // board that includes the OLED I2C pins and the Z limit input; running it
