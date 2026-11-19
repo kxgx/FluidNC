@@ -217,8 +217,9 @@ namespace MotorDrivers {
         // Called from IRAM_ATTR context (MotorDriver::set_disable is invoked
         // with interrupts disabled in some paths), so this only records the
         // request; the CAN task performs the actual bus transaction.
-        _disableRequested = disable;
-        _disablePending   = true;
+        _disableRequested  = disable;
+        _disableGeneration = _disableGeneration + 1;
+        _disablePending    = true;
     }
 
     void IRAM_ATTR Pd42s1Motor::set_direction_isr(bool dir) {
@@ -551,23 +552,33 @@ namespace MotorDrivers {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  responseLen = 0;
-        bool    disable     = _disableRequested;
+        bool     disable    = _disableRequested;
+        uint32_t generation = _disableGeneration;
 
         size_t len = Pd42s1Protocol::build_enable_command(uint8_t(_address), !disable, request, sizeof(request));
         if (transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
             Pd42s1Protocol::parse_ack(response, responseLen)) {
-            _disabled       = disable;
-            _disablePending = false;
-            _online         = true;
-            _writeFailures  = 0;
-            if (!disable) {
-                // Do not resync on every enable: the planner step engine can
-                // already be moving when a delayed enable arrives, and changing
-                // baseStepCount mid-block makes the target jump to the current
-                // position.  The initial sync at boot establishes the base.
-                _targetDirty = true;
+            _online        = true;
+            _writeFailures = 0;
+            if (generation == _disableGeneration) {
+                _disabled       = disable;
+                _disablePending = false;
+                if (!disable) {
+                    // Do not resync on every enable: the planner step engine can
+                    // already be moving when a delayed enable arrives, and changing
+                    // baseStepCount mid-block makes the target jump to the current
+                    // position.  The initial sync at boot establishes the base.
+                    _targetDirty = true;
+                }
+                can_log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
+            } else {
+                // A newer MD/ME request arrived while the transaction was in
+                // flight, so its result is already stale.  Apply the latest
+                // requested state on the next worker pass instead of letting
+                // the old value clear the pending flag.
+                _disablePending = true;
+                _nextDisableMs  = nowMs;
             }
-            can_log_info("CAN: " << name() << " motor " << (disable ? "disabled" : "enabled"));
         } else {
             _online = false;
             _writeFailures++;

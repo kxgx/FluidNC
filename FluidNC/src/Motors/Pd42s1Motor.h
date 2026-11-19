@@ -220,8 +220,12 @@ namespace MotorDrivers {
         volatile bool    _direction = true;
 
         // State shared between the ISR-ish disable request and the CAN task.
-        volatile bool _disableRequested = false;
-        volatile bool _disablePending   = false;
+        // The generation lets the CAN task detect that a newer MD/ME request
+        // arrived while its enable/disable transaction was in flight, so a
+        // stale result cannot overwrite the latest requested state.
+        volatile bool     _disableRequested  = false;
+        volatile bool     _disablePending    = false;
+        volatile uint32_t _disableGeneration = 0;
 
         // CAN task state
         bool     _synced         = false;
