@@ -26,6 +26,15 @@ namespace Machine {
         void init();
         bool configured() const { return _configured; }
 
+        // One-pixel probe using the Arduino RGB-LED helper.  This is a
+        // hardware diagnostic: it bypasses the multi-pixel streaming code and
+        // lights only pixel 0 of the selected strip(s).
+        void probe(bool top, bool bottom, bool on);
+
+        // Static DC level on the LED data pins, for measuring the level-shifter
+        // path with a multimeter (WS2812 data is idle low; no LED traffic).
+        void setStatic(bool top, bool bottom, bool high);
+
         // Remove A/B words from G0/G1/G92 while the machine has no A/B axes.
         // The stock LumenPnP OpenPnP machine.xml always sends A/B words; this
         // keeps a 3-axis bring-up machine usable.  No-op once A/B exist.
