@@ -20,9 +20,11 @@
 
 namespace Machine {
 
-    bool CanBus::_driver_configured = false;
-    int  CanBus::_driver_count      = 0;
-    bool CanBus::_logging_enabled   = false;
+    bool    CanBus::_driver_configured      = false;
+    int     CanBus::_driver_count           = 0;
+    bool    CanBus::_logging_enabled        = false;
+    uint8_t CanBus::_configuredAddresses[CanBus::MAX_CLIENTS] = {};
+    size_t  CanBus::_configuredAddressCount = 0;
 
     bool CanBus::logging_enabled() {
         return _logging_enabled;
@@ -268,8 +270,15 @@ namespace Machine {
         // the acknowledgment from drivers that were still echoing.
         send_echo_state_forced(false);
         vTaskDelay(pdMS_TO_TICKS(5));
-        for (uint8_t address = 1; address <= 8; ++address) {
-            set_echo_to_address_locked(address, false);
+        uint8_t addresses[MAX_CLIENTS];
+        size_t  count = configured_addresses(addresses, MAX_CLIENTS);
+        if (!count) {
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[count++] = uint8_t(i + 1);
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            set_echo_to_address_locked(addresses[i], false);
         }
         flush_receive();
         _echo_state = false;
@@ -347,13 +356,21 @@ namespace Machine {
             uint8_t  firmware;
             uint8_t  hardware;
         };
-        Found found[Machine::CanBus::MAX_CLIENTS];
-        int   foundCount = 0;
+        Found  found[Machine::CanBus::MAX_CLIENTS];
+        int    foundCount = 0;
+        uint8_t addresses[Machine::CanBus::MAX_CLIENTS];
+        size_t  addressCount = configured_addresses(addresses, Machine::CanBus::MAX_CLIENTS);
+        if (!addressCount) {
+            // Discovery fallback when no PD42S1 client was configured.
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[addressCount++] = uint8_t(i + 1);
+            }
+        }
 
         // Phase 1: discover drivers at all rates and move each one to the
         // target rate using an addressed 0x68 command.  Echo is enabled at
-        // each address first so a driver that previously had echo disabled
-        // can answer version probes.
+        // each configured address first so a driver that previously had echo
+        // disabled can answer version probes.
         for (uint32_t rate : bauds) {
             _baud = rate;
             if (!install_driver()) {
@@ -361,15 +378,16 @@ namespace Machine {
             }
             _ready = true;
 
-            for (uint8_t address = 1; address <= 8; ++address) {
-                enable_driver_echo_locked(address);
+            for (size_t i = 0; i < addressCount; ++i) {
+                enable_driver_echo_locked(addresses[i]);
             }
             vTaskDelay(pdMS_TO_TICKS(5));
 
             int foundAtRate = 0;
-            for (uint8_t address = 1; address <= 8; ++address) {
-                uint8_t firmware = 0;
-                uint8_t hardware = 0;
+            for (size_t i = 0; i < addressCount; ++i) {
+                uint8_t address   = addresses[i];
+                uint8_t firmware  = 0;
+                uint8_t hardware  = 0;
                 if (probe_address_quiet(address, firmware, hardware, 80, 3)) {
                     ++foundAtRate;
                     if (foundCount < int(sizeof(found) / sizeof(found[0]))) {
@@ -414,15 +432,15 @@ namespace Machine {
         }
         _ready = true;
 
-        for (uint8_t address = 1; address <= 8; ++address) {
-            enable_driver_echo_locked(address);
+        for (size_t i = 0; i < addressCount; ++i) {
+            enable_driver_echo_locked(addresses[i]);
         }
         _echo_state = true;
         vTaskDelay(pdMS_TO_TICKS(10));
 
-        int confirmed = 0;
-        int savedOk   = 0;
-        bool verified[9] = { false };
+        int  confirmed = 0;
+        int  savedOk   = 0;
+        bool verified[Machine::CanBus::MAX_CLIENTS + 1] = { false };
         // Verify exactly the IDs that phase 1 discovered, not an arbitrary
         // address range.  A recorded ID may have appeared at more than one
         // probe rate, so process each address once.
@@ -489,7 +507,7 @@ namespace Machine {
         // target rate gets a bounded retry from its recorded old rate.
         for (int i = 0; i < foundCount; ++i) {
             const uint8_t address = found[i].address;
-            if (address < 1 || address > 8 || verified[address]) {
+            if (address < 1 || address > Machine::CanBus::MAX_CLIENTS || verified[address]) {
                 continue;
             }
             if (found[i].rate == target) {
@@ -551,8 +569,8 @@ namespace Machine {
         // All configured drivers answered and saved the new rate.  Disable
         // echo by address rather than broadcast so a missed frame cannot hide
         // a driver at the wrong setting.
-        for (uint8_t address = 1; address <= 8; ++address) {
-            set_echo_to_address_locked(address, false);
+        for (size_t i = 0; i < addressCount; ++i) {
+            set_echo_to_address_locked(addresses[i], false);
         }
         _echo_state = false;
         can_log_info("CAN: command echo disabled on the drivers after auto-config");
@@ -701,6 +719,31 @@ namespace Machine {
         return false;
     }
 
+    size_t CanBus::client_addresses(uint8_t* out, size_t max) const {
+        size_t count = 0;
+        for (size_t i = 0; i < _n_clients && count < max; ++i) {
+            CanBusClient* client = _clients[i];
+            if (!client) {
+                continue;
+            }
+            uint8_t address = client->bus_address();
+            if (!address) {
+                continue;
+            }
+            bool duplicate = false;
+            for (size_t j = 0; j < count; ++j) {
+                if (out[j] == address) {
+                    duplicate = true;
+                    break;
+                }
+            }
+            if (!duplicate) {
+                out[count++] = address;
+            }
+        }
+        return count;
+    }
+
     void CanBus::inhibit_control(const char* reason) {
         _inhibited      = true;
         _inhibit_reason = reason;
@@ -735,6 +778,40 @@ namespace Machine {
 
     int CanBus::configured_driver_count() {
         return _driver_count;
+    }
+
+    void CanBus::register_configured_address(uint8_t address) {
+        if (address < 1 || address > MAX_CLIENTS) {
+            return;
+        }
+        for (size_t i = 0; i < _configuredAddressCount; ++i) {
+            if (_configuredAddresses[i] == address) {
+                return;
+            }
+        }
+        if (_configuredAddressCount < MAX_CLIENTS) {
+            _configuredAddresses[_configuredAddressCount++] = address;
+        }
+    }
+
+    void CanBus::unregister_configured_address(uint8_t address) {
+        for (size_t i = 0; i < _configuredAddressCount; ++i) {
+            if (_configuredAddresses[i] == address) {
+                for (size_t j = i + 1; j < _configuredAddressCount; ++j) {
+                    _configuredAddresses[j - 1] = _configuredAddresses[j];
+                }
+                --_configuredAddressCount;
+                return;
+            }
+        }
+    }
+
+    size_t CanBus::configured_addresses(uint8_t* out, size_t max) {
+        size_t count = _configuredAddressCount < max ? _configuredAddressCount : max;
+        for (size_t i = 0; i < count; ++i) {
+            out[i] = _configuredAddresses[i];
+        }
+        return count;
     }
 
     bool CanBus::driver_configured() {
@@ -953,8 +1030,15 @@ namespace Machine {
         // that filter broadcast frames.
         send_echo_state_forced(true);
         vTaskDelay(pdMS_TO_TICKS(5));
-        for (uint8_t address = 1; address <= 8; ++address) {
-            enable_driver_echo_locked(address);
+        uint8_t addresses[MAX_CLIENTS];
+        size_t  count = configured_addresses(addresses, MAX_CLIENTS);
+        if (!count) {
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[count++] = uint8_t(i + 1);
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            enable_driver_echo_locked(addresses[i]);
         }
     }
 
@@ -967,7 +1051,7 @@ namespace Machine {
         Lock lock(*this);
         enable_all_driver_echo_locked();
         _last_all_echo_ms = now_ms();
-        can_log_info("CAN echo: sent 0x6F=0 to addresses 1..8");
+        can_log_info("CAN echo: sent 0x6F=0 to configured addresses");
     }
 
     void CanBus::ensure_driver_echo() {
@@ -996,8 +1080,15 @@ namespace Machine {
             return;
         }
         vTaskDelay(pdMS_TO_TICKS(10));
-        for (uint8_t address = 1; address <= 8; ++address) {
-            enable_driver_echo_locked(address);
+        uint8_t addresses[MAX_CLIENTS];
+        size_t  count = configured_addresses(addresses, MAX_CLIENTS);
+        if (!count) {
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[count++] = uint8_t(i + 1);
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            enable_driver_echo_locked(addresses[i]);
         }
         flush_receive();
         can_log_info("CAN: enabled command echo on the drivers at startup");
@@ -1077,7 +1168,7 @@ namespace Machine {
 
     int CanBus::scan_addresses() {
         int found = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
+        for (uint8_t address = 1; address <= MAX_CLIENTS; ++address) {
             found += scan_address(address, 100);
         }
         if (!found) {
@@ -1124,7 +1215,7 @@ namespace Machine {
                 // The multi-baud recovery scan explicitly enables command
                 // echo on every address before reading; the plain $CANScan
                 // stays faithful to the vendor example (no 0x6F commands).
-                log_info("CAN scan: enabling echo on addresses 1..8");
+                log_info("CAN scan: enabling echo on configured addresses");
                 enable_all_driver_echo_locked();
                 vTaskDelay(pdMS_TO_TICKS(5));
                 total += scan_addresses();
@@ -1215,10 +1306,18 @@ namespace Machine {
         // the enable/brake state; in testing on firmware V1.6 a broadcast
         // 0xFB made all four drivers stop answering until they were power
         // cycled, so this command deliberately avoids 0xFB and broadcast.
-        log_info("CAN: releasing stall protection (0xF9) on addresses 1..8");
+        uint8_t addresses[MAX_CLIENTS];
+        size_t  count = configured_addresses(addresses, MAX_CLIENTS);
+        if (!count) {
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[count++] = uint8_t(i + 1);
+            }
+        }
+        log_info("CAN: releasing stall protection (0xF9) on configured addresses");
         int acked = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
-            size_t len = Pd42s1Protocol::build_clear_stall_command(address, request, sizeof(request));
+        for (size_t i = 0; i < count; ++i) {
+            uint8_t address = addresses[i];
+            size_t  len     = Pd42s1Protocol::build_clear_stall_command(address, request, sizeof(request));
             for (int attempt = 0; attempt < 2; ++attempt) {
                 size_t responseLen = 0;
                 if (transact(request, len, response, sizeof(response), responseLen, 50) &&
@@ -1255,7 +1354,7 @@ namespace Machine {
 
         int found    = 0;
         int abnormal = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
+        for (uint8_t address = 1; address <= MAX_CLIENTS; ++address) {
             if (!has_client(address)) {
                 continue;
             }
@@ -1348,7 +1447,7 @@ namespace Machine {
         }
         Lock lock(*this);
         int  found = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
+        for (uint8_t address = 1; address <= MAX_CLIENTS; ++address) {
             if (!has_client(address)) {
                 continue;
             }
@@ -1375,7 +1474,7 @@ namespace Machine {
         Lock lock(*this);
 
         int found = 0;
-        for (uint8_t address = 1; address <= 8; ++address) {
+        for (uint8_t address = 1; address <= MAX_CLIENTS; ++address) {
             if (!has_client(address)) {
                 continue;
             }
@@ -1768,8 +1867,15 @@ namespace Machine {
 
         send_echo_state_forced(true);
         vTaskDelay(pdMS_TO_TICKS(50));
-        for (uint8_t address = 1; address <= 8; ++address) {
-            enable_driver_echo_locked(address);
+        uint8_t addresses[MAX_CLIENTS];
+        size_t  count = configured_addresses(addresses, MAX_CLIENTS);
+        if (!count) {
+            for (size_t i = 0; i < 8; ++i) {
+                addresses[count++] = uint8_t(i + 1);
+            }
+        }
+        for (size_t i = 0; i < count; ++i) {
+            enable_driver_echo_locked(addresses[i]);
         }
         flush_receive();
         can_log_info("CAN: driver reset done, command echo re-enabled; run $CANScan");

@@ -59,7 +59,7 @@ namespace Machine {
     public:
         CanBus() = default;
 
-        static constexpr size_t MAX_CLIENTS = 8;
+        static constexpr size_t MAX_CLIENTS = 16;
 
         // PD42S1 manual section 4.1 item 7: two complete instructions must be
         // at least this far apart so the driver can finish parsing the first
@@ -90,6 +90,13 @@ namespace Machine {
         static bool driver_configured();
         static int  configured_driver_count();
 
+        // Addresses registered from the parsed motor configurations before the
+        // bus starts.  Auto-config must use these rather than _clients because
+        // CanBus::init() runs before Axes::init() adds the clients.
+        static void   register_configured_address(uint8_t address);
+        static void   unregister_configured_address(uint8_t address);
+        static size_t configured_addresses(uint8_t* out, size_t max);
+
         // CAN background logging is off by default.  Explicit $CAN... report
         // commands still print their results; this gate only controls the
         // asynchronous/boot/worker messages.
@@ -101,6 +108,9 @@ namespace Machine {
         uint32_t command_id() const { return _command_id; }
 
         void add_client(CanBusClient* client);
+
+        // Unique slave addresses of configured clients, in client order.
+        size_t client_addresses(uint8_t* out, size_t max) const;
 
         // Splits one logical protocol message into 8-byte CAN data frames and
         // transmits them back-to-back.  Returns false if any frame could not
@@ -285,9 +295,11 @@ namespace Machine {
         uint8_t  _groupMemberAddress = 0;
         uint8_t  _groupMemberGroup   = 0;
 
-        static bool _driver_configured;
-        static int  _driver_count;
-        static bool _logging_enabled;
+        static bool    _driver_configured;
+        static int     _driver_count;
+        static bool    _logging_enabled;
+        static uint8_t _configuredAddresses[MAX_CLIENTS];
+        static size_t  _configuredAddressCount;
 
         bool              _ready          = false;
         std::atomic<bool> _diagnostic_active{ false };

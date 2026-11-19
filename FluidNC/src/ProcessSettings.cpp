@@ -1418,8 +1418,15 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN zero: only allowed while Idle or Alarm");
         return Error::InvalidValue;
     }
-    int addresses[8] = { 1, 2, 3, 4 };
-    int count         = 4;
+    uint8_t addresses[Machine::CanBus::MAX_CLIENTS];
+    int     count = int(config->_can->client_addresses(addresses, Machine::CanBus::MAX_CLIENTS));
+    if (!count) {
+        // Discovery fallback for a machine with no configured PD42S1 clients.
+        count = 4;
+        for (int i = 0; i < count; ++i) {
+            addresses[i] = uint8_t(i + 1);
+        }
+    }
     if (value && *value) {
         count = 0;
         const char* p = value;
@@ -1430,7 +1437,7 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
                 log_info("CAN zero: invalid address list");
                 return Error::InvalidValue;
             }
-            addresses[count++] = int(a);
+            addresses[count++] = uint8_t(a);
             p = end;
             while (*p == ',' || *p == ' ') {
                 ++p;
@@ -1438,10 +1445,10 @@ static Error can_zero(const char* value, AuthenticationLevel auth_level, Channel
         }
     }
     int     succeeded = 0;
-    uint8_t zeroed[8];
+    uint8_t zeroed[Machine::CanBus::MAX_CLIENTS];
     for (int i = 0; i < count; ++i) {
-        if (config->_can->zero_driver_position(uint8_t(addresses[i]))) {
-            zeroed[succeeded++] = uint8_t(addresses[i]);
+        if (config->_can->zero_driver_position(addresses[i])) {
+            zeroed[succeeded++] = addresses[i];
         }
         delay_ms(20);
     }

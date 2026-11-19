@@ -39,6 +39,7 @@ namespace MotorDrivers {
 
     Pd42s1Motor::~Pd42s1Motor() {
         unregister_instance();
+        Machine::CanBus::unregister_configured_address(uint8_t(_address));
         Machine::CanBus::unmark_driver_configured();
     }
 
@@ -166,7 +167,9 @@ namespace MotorDrivers {
     void Pd42s1Motor::validate() {
         Assert(config != nullptr && config->_can != nullptr, "pd42s1 motor driver requires a can: section");
         Assert(config->_can->configured(), "pd42s1 motor driver requires can: tx_pin and rx_pin to be configured");
-        Assert(_address >= 1 && _address <= 255, "pd42s1 address must be 1..255");
+        Assert(_address >= 1 && _address <= Machine::CanBus::MAX_CLIENTS,
+               "pd42s1 address must be 1..MAX_CLIENTS (16 in this firmware)");
+        Machine::CanBus::register_configured_address(uint8_t(_address));
         Assert(_countsPerStep > 0.0f, "pd42s1 counts_per_step must be positive");
         Assert(_speedRpm >= 1 && _speedRpm <= 6000, "pd42s1 speed_rpm must be 1..6000");
         Assert(_accel >= 0 && _accel <= 200, "pd42s1 accel must be 0..200");
