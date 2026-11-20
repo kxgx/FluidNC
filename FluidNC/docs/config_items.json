@@ -2331,18 +2331,18 @@
   "speed_rpm": {
    "type": "integer",
    "min": 1,
-   "max": 6000,
+   "max": 3000,
    "default": "600",
    "tuning": "per-machine",
-   "description": "Maximum following speed in RPM.\n"
+   "description": "Maximum following speed in RPM.  X42S free-protocol speed fields are limited to 3000 RPM, so values above that are rejected.\n"
   },
   "accel": {
    "type": "integer",
    "min": 0,
-   "max": 200,
+   "max": 65535,
    "default": "80",
    "tuning": "per-machine",
-   "description": "Driver acceleration. For Emm this is the 0..200 ramp setting; for X it is converted to RPM/s. Keep it high enough to follow the planner.\n"
+   "description": "Driver acceleration. For Emm this is the native 0..255 ramp setting; for X it is the native RPM/s value (0..65535).\n"
   },
   "update_ms": {
    "type": "integer",

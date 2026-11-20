@@ -208,10 +208,12 @@ namespace Machine {
         // consistently.
         bool send_message(uint32_t can_id, const uint8_t* data, size_t len, uint32_t timeout_ms);
 
-        // Like send_message(), but the identifier of each frame is
-        // (base_id | packet_number).  data starts after the protocol-specific
-        // address/header byte.  For protocols whose extended frame ID is
-        // (address << 8) | packet.
+        // Like send_message(), but each frame identifier is
+        // (base_id | packet_number).  data starts at the function code, after
+        // the address byte.  ZDT framing repeats that function code at the
+        // start of every frame and carries at most 7 following bytes per
+        // frame; the final payload byte is the checksum.  This applies to
+        // protocols whose extended frame ID is (address << 8) | packet.
         bool send_chunked(uint32_t base_id, const uint8_t* data, size_t len, uint32_t timeout_ms);
 
         // Waits for the next CAN data frame, copies its payload into buf and

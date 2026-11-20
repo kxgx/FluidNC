@@ -16,7 +16,8 @@ namespace MotorDrivers {
     // The CAN layer is the vendor's free protocol:
     //   extended ID = (address << 8) | packet
     //   data        = function code, payload..., checksum
-    // Long messages are split into 8-byte frames, packet 0, 1, ...
+    // Long messages are split into CAN frames; every frame repeats the function
+    // code and carries up to 7 payload bytes, with packet 0, 1, ... in the ID.
     //
     // Two firmware families share this framing but use different function
     // payloads:
@@ -41,15 +42,18 @@ namespace MotorDrivers {
         // Emit a relative move from the previously commanded target.  The
         // caller keeps its own target accumulator; this function converts a
         // signed pulse delta to the selected firmware's position units.
+        // accel follows the selected firmware's native unit: Emm uses the
+        // 0..255 ramp setting, X uses RPM/s directly (0..65535).
         static size_t build_relative_position(ZdtFirmware  firmware,
                                               uint8_t       address,
                                               int32_t       delta_counts,
                                               uint16_t      speed_rpm,
-                                              uint8_t       accel,
+                                              uint16_t      accel,
                                               uint32_t      counts_per_rev,
                                               ZdtChecksum   checksum,
                                               uint8_t*      out,
-                                              size_t        capacity);
+                                              size_t        capacity,
+                                              double*       angle_residual = nullptr);
 
         static bool parse_ack(const uint8_t* data, size_t len, uint8_t function);
         static bool parse_position(ZdtFirmware    firmware,

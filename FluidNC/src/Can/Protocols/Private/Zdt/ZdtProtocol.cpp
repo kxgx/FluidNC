@@ -130,11 +130,12 @@ namespace MotorDrivers {
                                                 uint8_t      address,
                                                 int32_t      delta_counts,
                                                 uint16_t     speed_rpm,
-                                                uint8_t      accel,
+                                                uint16_t     accel,
                                                 uint32_t     counts_per_rev,
                                                 ZdtChecksum  checksumMode,
                                                 uint8_t*     out,
-                                                size_t       capacity) {
+                                                size_t       capacity,
+                                                double*      angle_residual) {
         if (counts_per_rev == 0 || delta_counts == 0) {
             return 0;
         }
@@ -150,36 +151,53 @@ namespace MotorDrivers {
             out[1] = 0xFD;
             out[2] = negative ? 1 : 0;
             put16(out + 3, velocity);
-            out[5] = accel;
+            out[5] = uint8_t(std::min<uint32_t>(accel, 255u));  // Emm ramp setting
             put32(out + 6, magnitude);
             out[10] = 0;  // relative to the previous target position
             out[11] = 0;  // do not defer with the multi-machine sync flag
             return finish(out, 12, checksumMode);
         }
 
-        // X firmware position is in 0.1 degree units.
+        // X firmware position is in 0.1 degree units.  Carry the sub-unit
+        // remainder across streamed commands; otherwise a 5 ms stream of
+        // 0.45-unit deltas would round up on every packet and accumulate a
+        // large angle error.
         if (capacity < 16) {
             return 0;
         }
-        const uint64_t angle01 = (uint64_t(magnitude) * 3600u + counts_per_rev / 2) / counts_per_rev;
-        if (angle01 > 0xFFFFFFFFull) {
+        double signedAngle = (negative ? -1.0 : 1.0) * (double(magnitude) * 3600.0 / double(counts_per_rev));
+        if (angle_residual) {
+            signedAngle += *angle_residual;
+        }
+        const int64_t angleRounded = llround(signedAngle);
+        if (angle_residual) {
+            *angle_residual = signedAngle - double(angleRounded);
+        }
+        const bool     xNegative  = angleRounded < 0;
+        const uint64_t xMagnitude = uint64_t(xNegative ? -angleRounded : angleRounded);
+        if (xMagnitude > 0xFFFFFFFFull) {
             return 0;
         }
         const uint16_t velocity01 = uint16_t(std::min<uint32_t>(uint32_t(speed_rpm) * 10u, 30000u));
         out[0]  = address;
         out[1]  = 0xFD;
-        out[2]  = negative ? 1 : 0;
-        put16(out + 3, uint32_t(accel) * 256u);  // acceleration in RPM/s
-        put16(out + 5, uint32_t(accel) * 256u);  // deceleration in RPM/s
+        out[2]  = xNegative ? 1 : 0;
+        put16(out + 3, accel);  // X firmware: RPM/s, sent as an absolute value
+        put16(out + 5, accel);  // deceleration in RPM/s
         put16(out + 7, velocity01);
-        put32(out + 9, uint32_t(angle01));
+        put32(out + 9, uint32_t(xMagnitude));
         out[13] = 0;  // relative to the previous target position
         out[14] = 0;  // do not defer with the multi-machine sync flag
         return finish(out, 15, checksumMode);
     }
 
     bool ZdtProtocol::parse_ack(const uint8_t* data, size_t len, uint8_t function) {
-        return data && len >= 3 && data[0] == function && data[1] == 0x02;
+        if (!data || len < 3 || data[0] != function) {
+            return false;
+        }
+        // 0x02 = command accepted; 0x9F = motion/zero completed.  Some
+        // Response modes (Reached/Both) return 9F for position commands.
+        return data[1] == 0x02 || data[1] == 0x9F;
     }
 
     bool ZdtProtocol::parse_position(ZdtFirmware firmware,

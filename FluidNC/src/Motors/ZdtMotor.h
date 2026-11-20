@@ -73,15 +73,16 @@ namespace MotorDrivers {
             // @config speed_rpm
             // @default 600
             // @tuning per-machine
-            // Maximum following speed in RPM.
-            handler.item("speed_rpm", _speedRpm, 1, 6000);
+            // Maximum following speed in RPM.  X42S free-protocol speed fields
+            // are limited to 3000 RPM, so values above that are rejected.
+            handler.item("speed_rpm", _speedRpm, 1, 3000);
 
             // @config accel
             // @default 80
             // @tuning per-machine
-            // Driver acceleration. For Emm this is the 0..200 ramp setting; for
-            // X it is converted to RPM/s. Keep it high enough to follow the planner.
-            handler.item("accel", _accel, 0, 200);
+            // Driver acceleration. For Emm this is the native 0..255 ramp
+            // setting; for X it is the native RPM/s value (0..65535).
+            handler.item("accel", _accel, 0, 65535);
 
             // @config update_ms
             // @default 20
@@ -91,11 +92,15 @@ namespace MotorDrivers {
         }
 
         bool set_homing_mode(bool isHoming) override { return true; }
-        bool can_self_home() override { return true; }
+        // ZDT free protocol has its own 0x9A homing command, but this driver
+        // does not implement the 9A/3B state machine.  Do not tell FluidNC that
+        // the drive can home without external limit switches.
+        bool can_self_home() override { return false; }
         void set_axis(axis_t axis) override { _axis = axis; }
         void set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) override {}
         void stop_motion() override;
         void resume_motion() override;
+        void hold_at_limit() override { _stopRequested = true; }
         void set_disable(bool disable) override;
         void on_stepping_reset() override;
 
@@ -118,6 +123,7 @@ namespace MotorDrivers {
         bool           send_stop();
         bool           send_move(int32_t delta_counts);
         bool           transact(const uint8_t* request, size_t length, uint8_t function, uint8_t* response, size_t& response_len);
+        void           report_motion_fault(const char* reason);
 
         Machine::CanBus* _bus = nullptr;
         axis_t           _axis = X_AXIS;
@@ -142,9 +148,16 @@ namespace MotorDrivers {
 
         int32_t  _lastSentSteps = 0;
         double   _residual      = 0.0;
+        double   _xAngleResidual = 0.0;
         bool     _enabled       = false;
         bool     _synced        = false;
+        bool     _lastSendOk    = false;
+        bool     _lastAckError  = false;
+        uint32_t _stopFailures  = 0;
+        uint32_t _ackFailures   = 0;
+        uint32_t _txFailures    = 0;
         uint32_t _nextPollMs    = 0;
+        uint32_t _lastAckWarnMs = 0;
     };
 }
 

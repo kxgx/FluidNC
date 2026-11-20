@@ -69,6 +69,10 @@ TEST(ZdtProtocol, XPositionUsesTenthsOfDegree) {
     ASSERT_EQ(len, 16u);
     EXPECT_EQ(frame[1], 0xFD);
     EXPECT_EQ(frame[2], 0);
+    EXPECT_EQ(frame[3], 0x00);
+    EXPECT_EQ(frame[4], 0x32);  // X acceleration is native RPM/s, not *256
+    EXPECT_EQ(frame[5], 0x00);
+    EXPECT_EQ(frame[6], 0x32);
     EXPECT_EQ(frame[7], 0x17);
     EXPECT_EQ(frame[8], 0x70);  // 6000 = 0.1 RPM units
     EXPECT_EQ(frame[9], 0x00);
@@ -88,6 +92,8 @@ TEST(ZdtProtocol, ParsesAck) {
     const uint8_t ack[] = { 0xFD, 0x02, 0x6B };
     EXPECT_TRUE(ZdtProtocol::parse_ack(ack, sizeof(ack), 0xFD));
     EXPECT_FALSE(ZdtProtocol::parse_ack(ack, sizeof(ack), 0xF3));
+    const uint8_t reached[] = { 0xFD, 0x9F, 0x6B };
+    EXPECT_TRUE(ZdtProtocol::parse_ack(reached, sizeof(reached), 0xFD));
     const uint8_t error[] = { 0xFD, 0xE2, 0x6B };
     EXPECT_FALSE(ZdtProtocol::parse_ack(error, sizeof(error), 0xFD));
 }

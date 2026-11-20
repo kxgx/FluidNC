@@ -46,8 +46,8 @@ namespace MotorDrivers {
         Assert(_address >= 1 && _address <= Machine::CanBus::MAX_CLIENTS, "zdt address must be 1..MAX_CLIENTS");
         Assert(_countsPerRev > 0, "zdt counts_per_rev must be positive");
         Assert(_countsPerStep > 0.0f, "zdt counts_per_step must be positive");
-        Assert(_speedRpm >= 1 && _speedRpm <= 6000, "zdt speed_rpm must be 1..6000");
-        Assert(_accel >= 0 && _accel <= 200, "zdt accel must be 0..200");
+        Assert(_speedRpm >= 1 && _speedRpm <= 3000, "zdt speed_rpm must be 1..3000 for the X42S free protocol");
+        Assert(_accel >= 0 && _accel <= 65535, "zdt accel must be 0..65535");
         Assert(_updateMs >= 2 && _updateMs <= 1000, "zdt update_ms must be 2..1000");
 
         if (string_util::equal_ignore_case(_firmwareName, "X")) {
@@ -56,6 +56,11 @@ namespace MotorDrivers {
             _firmware = ZdtFirmware::Emm;
         } else {
             Assert(false, "zdt firmware must be Emm or X");
+        }
+        if (_firmware == ZdtFirmware::Emm) {
+            Assert(_accel >= 0 && _accel <= 255, "zdt Emm accel is the native 0..255 ramp setting");
+        } else {
+            Assert(_accel >= 1, "zdt X accel is RPM/s and must be at least 1");
         }
 
         if (string_util::equal_ignore_case(_checksumName, "XOR")) {
@@ -123,14 +128,17 @@ namespace MotorDrivers {
     }
 
     void ZdtMotor::on_position_zeroed() {
-        _lastSentSteps = _stepCount;
-        _residual      = 0.0;
-        _synced        = true;
+        _lastSentSteps  = _stepCount;
+        _residual       = 0.0;
+        _xAngleResidual = 0.0;
+        _synced         = true;
     }
 
     bool ZdtMotor::transact(
         const uint8_t* request, size_t length, uint8_t function, uint8_t* response, size_t& response_len) {
-        response_len = 0;
+        response_len      = 0;
+        _lastSendOk       = false;
+        _lastAckError     = false;
         if (!_bus || !_bus->ready() || length < 2) {
             return false;
         }
@@ -139,11 +147,29 @@ namespace MotorDrivers {
         if (!_bus->send_chunked(uint32_t(_address) << 8, request + 1, length - 1, TRANSACTION_TIMEOUT_MS)) {
             return false;
         }
-        response_len = _bus->receive_chunk(response, 16, TRANSACTION_TIMEOUT_MS);
+        // The relative move has already left the controller.  Record that fact
+        // separately from the acknowledgement: a missing ACK must not cause the
+        // same relative delta to be sent a second time.
+        _lastSendOk = true;
+
+        uint32_t responseId = 0;
+        bool     extended   = false;
+        response_len        = _bus->receive_frame(responseId, extended, response, 16, TRANSACTION_TIMEOUT_MS);
+        if (!response_len || !extended || uint8_t(responseId >> 8) != uint8_t(_address)) {
+            return false;
+        }
+        if (response[0] == function && response_len >= 3) {
+            const uint8_t status = response[1];
+            if (status == 0xE2 || status == 0xEE || status == 0x9E) {
+                _lastAckError = true;
+                return false;
+            }
+        }
         return ZdtProtocol::parse_ack(response, response_len, function);
     }
 
     bool ZdtMotor::send_enable(bool enable) {
+        _lastSendOk = false;
         uint8_t request[ZdtProtocol::MAX_MESSAGE];
         size_t  length = ZdtProtocol::build_enable(uint8_t(_address), enable, _checksum, request, sizeof(request));
         if (!length) {
@@ -160,6 +186,7 @@ namespace MotorDrivers {
     }
 
     bool ZdtMotor::send_stop() {
+        _lastSendOk = false;
         uint8_t request[ZdtProtocol::MAX_MESSAGE];
         size_t  length = ZdtProtocol::build_stop(uint8_t(_address), _checksum, request, sizeof(request));
         if (!length) {
@@ -170,17 +197,28 @@ namespace MotorDrivers {
         return transact(request, length, 0xFE, response, response_len);
     }
 
+    void ZdtMotor::report_motion_fault(const char* reason) {
+        _synced           = false;
+        _stopRequested    = true;
+        _disableRequested = true;
+        log_error("ZDT " << name() << ": " << reason << "; stopping all motors");
+        Axes::set_disable(true, true);
+        send_alarm(ExecAlarm::HardStop);
+    }
+
     bool ZdtMotor::send_move(int32_t delta_counts) {
+        _lastSendOk = false;
         uint8_t request[ZdtProtocol::MAX_MESSAGE];
         size_t  length = ZdtProtocol::build_relative_position(_firmware,
                                                              uint8_t(_address),
                                                              delta_counts,
                                                              uint16_t(_speedRpm),
-                                                             uint8_t(_accel),
+                                                             uint16_t(_accel),
                                                              uint32_t(_countsPerRev),
                                                              _checksum,
                                                              request,
-                                                             sizeof(request));
+                                                             sizeof(request),
+                                                             _firmware == ZdtFirmware::X ? &_xAngleResidual : nullptr);
         if (!length) {
             return false;
         }
@@ -194,17 +232,28 @@ namespace MotorDrivers {
             return;
         }
 
+        if (_stopRequested) {
+            bool sent = send_stop();
+            // FE is idempotent; a lost acknowledgement must not cause a retry
+            // storm, but a failed transmission must be retried.
+            if (sent || _lastSendOk) {
+                _stopRequested = false;
+                _stopFailures  = 0;
+                _lastSentSteps = _stepCount;
+                _residual      = 0.0;
+                _xAngleResidual = 0.0;
+            } else if (++_stopFailures >= 3) {
+                _stopRequested = false;
+                _stopFailures  = 0;
+                report_motion_fault("emergency stop could not be delivered");
+            }
+            return;
+        }
+
         if (_disableRequested != !_enabled) {
             if (!send_enable(!_disableRequested)) {
                 return;
             }
-        }
-        if (_stopRequested) {
-            _stopRequested = false;
-            send_stop();
-            _lastSentSteps = _stepCount;
-            _residual      = 0.0;
-            return;
         }
         if (_disableRequested) {
             return;
@@ -232,8 +281,38 @@ namespace MotorDrivers {
             return;
         }
 
-        if (send_move(counts)) {
+        bool acknowledged = send_move(counts);
+        if (!_lastSendOk) {
+            if (++_txFailures >= 3) {
+                _txFailures = 0;
+                report_motion_fault("relative move could not be transmitted");
+            }
+            return;
+        }
+        _txFailures = 0;
+        if (_lastAckError) {
+            // The driver explicitly rejected the command.  Do not keep
+            // accumulating a target that it is not executing.
+            report_motion_fault("driver rejected a relative move");
+            return;
+        }
+        if (_lastSendOk) {
+            // The command was transmitted.  Advance the relative-base even if
+            // the response was lost or the driver's Response mode is None;
+            // replaying a relative move after a lost ACK would move twice.
             _lastSentSteps = targetSteps;
+            if (acknowledged) {
+                _ackFailures = 0;
+            } else {
+                if (now_ms - _lastAckWarnMs > 5000) {
+                    _lastAckWarnMs = now_ms;
+                    log_warn("ZDT " << name() << ": relative move sent without acknowledged reply");
+                }
+                if (++_ackFailures >= 3) {
+                    _ackFailures = 0;
+                    report_motion_fault("repeated missing replies");
+                }
+            }
         }
     }
 
