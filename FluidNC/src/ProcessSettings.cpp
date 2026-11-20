@@ -1502,15 +1502,15 @@ static Error can_stop(const char* value, AuthenticationLevel auth_level, Channel
         log_info("CAN stop: no can: section configured");
         return Error::Ok;
     }
+    // If this was issued during motion, raise the safety alarm first.  Even
+    // if the per-driver disable readback later fails, the planner/laser/job
+    // must not keep running; the alarm is independent of that verification.
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        send_alarm(ExecAlarm::HardStop);
+    }
     if (!config->_can->driver()->stop_all_drivers()) {
         log_info("CAN stop: not all drivers verified disabled; bus remains latched");
         return Error::InvalidValue;
-    }
-    // If this was issued during motion, the planner would otherwise keep
-    // consuming G-code after the motors have been disabled, silently losing
-    // the corresponding travel.  Stop the job as a safety action.
-    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
-        send_alarm(ExecAlarm::HardStop);
     }
     return Error::Ok;
 }

@@ -286,6 +286,7 @@ namespace Machine {
 
         bool              _ready         = false;
         bool              _control_ready = false;
+        bool              _initializing  = false;
         bool              _inhibited     = false;
         const char*       _inhibit_reason = nullptr;
         std::atomic<bool> _stop_latched{ false };
@@ -323,3 +324,4 @@ namespace Machine {
 #define can_log_error(...) do { log_error(__VA_ARGS__); } while (0)
 
 #endif  // MAX_N_CAN
+

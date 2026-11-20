@@ -216,13 +216,19 @@ namespace Machine {
         if (!install_transport()) {
             return;
         }
+        // The first worker start is part of the driver's initialisation (some
+        // drivers suspend/resume the transport while probing).  After this
+        // point a worker may only be restarted when control_ready is true.
+        _initializing = true;
         start_worker();
         if (!selected->init_driver()) {
             can_log_error("CAN: driver '" << selected->driver_name() << "' init failed");
             set_control_ready(false);
             stop_worker();
+            _initializing = false;
             return;
         }
+        _initializing = false;
         if (!_task_handle) {
             // The driver may have suspended/resumed the transport; a worker
             // that did not come back up means control is not available even
@@ -313,7 +319,7 @@ namespace Machine {
         if (!_task_handle) {
             start_worker();
         }
-        return _ready;
+        return _ready && _task_handle != nullptr;
     }
 
     void CanBus::add_client(CanBusClient* client) {
@@ -704,6 +710,10 @@ namespace Machine {
         }
         if (!_ready || !_bus_mutex) {
             can_log_error("CAN: refusing to start worker; transport is not ready");
+            return;
+        }
+        if (!_initializing && !_control_ready) {
+            can_log_error("CAN: refusing to start worker; control is not ready (driver init/auto-config failed)");
             return;
         }
         _stop_requested = false;

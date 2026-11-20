@@ -1034,3 +1034,4 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
+
