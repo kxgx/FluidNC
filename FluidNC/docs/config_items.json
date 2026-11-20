@@ -370,6 +370,11 @@
   }
  },
  "can": {
+  "driver": {
+   "type": "string",
+   "default": "\"pd42s1\"",
+   "description": "CAN motor protocol.  The command layer talks to this selection only through CanDriver; adding a vendor means adding a CanDriver implementation rather than editing GCode/ProcessSettings.\n"
+  },
   "tx_pin": {
    "type": "pin",
    "default": "NO_PIN",
@@ -392,7 +397,23 @@
    "type": "integer",
    "default": "0x1000",
    "tuning": "per-machine",
-   "description": "29-bit extended CAN ID used for frames sent by the controller.  The vendor's CAN examples use 0x1000, which is the PD42S1 default.  Only change this if the drivers were reprogrammed with command ID 0x6C.\n"
+   "description": "29-bit extended CAN ID used for frames sent by the controller.  The vendor's CAN examples use 0x1000, which is the PD42S1 default.  The driver only accepts IDs in 0x1000..0x100F; validate() enforces that. Only change this if the drivers were reprogrammed with command ID 0x6C.\n"
+  },
+  "group_member_address": {
+   "type": "integer",
+   "min": 0,
+   "max": 255,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "Optional slave address of a driver that should be switched to group-address mode at boot.  0 disables the feature.\n"
+  },
+  "group_member_group": {
+   "type": "integer",
+   "min": 0,
+   "max": 255,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "Group address for group_member_address.  Both fields must be non-zero and different to enable the feature.\n"
   }
  },
  "i2cN": {
@@ -572,6 +593,42 @@
    "default": "NO_PIN",
    "pin_attributes": "output",
    "description": "Digital output slot 7.\n"
+  }
+ },
+ "lumen": {
+  "top_pin": {
+   "type": "pin",
+   "default": "NO_PIN",
+   "tuning": "per-machine",
+   "description": "WS2812B data pin for the top camera-light strip.\n"
+  },
+  "bottom_pin": {
+   "type": "pin",
+   "default": "NO_PIN",
+   "tuning": "per-machine",
+   "description": "WS2812B data pin for the bottom camera-light strip.\n"
+  },
+  "count": {
+   "type": "integer",
+   "min": 1,
+   "max": 8,
+   "default": "8",
+   "tuning": "per-machine",
+   "description": "Number of pixels in each strip (1..8).\n"
+  },
+  "startup_test": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "typical",
+   "description": "Briefly show red/green on both strips at boot.\n"
+  },
+  "i2c_bus": {
+   "type": "integer",
+   "min": 0,
+   "max": 1,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "I2C bus used by M260/M261 commands.\n"
   }
  },
  "uartN": {
@@ -2128,10 +2185,18 @@
   "address": {
    "type": "integer",
    "min": 1,
-   "max": 255,
+   "max": 16,
    "default": "1",
    "tuning": "per-machine",
-   "description": "CAN slave address of this driver, 1..255.  Must match the value written to the driver with setting 0x60 (set slave address). Address 0 is the broadcast address and cannot be used here.\n"
+   "description": "CAN slave address of this driver.  Must be unique and match the value written to the driver with setting 0x60 (set slave address). Address 0 is broadcast; this firmware supports MAX_CLIENTS (16) configured CAN motors.\n"
+  },
+  "sync_group": {
+   "type": "integer",
+   "min": 0,
+   "max": 255,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "Optional position-update group. Motors with the same non-zero sync_group have their absolute-position targets sent back-to-back from one CAN worker pass. Each motor still applies its own invert_direction, so direction configuration is unchanged. 0 disables grouping (normal independent streaming).\n"
   },
   "counts_per_step": {
    "type": "float",
@@ -2153,7 +2218,7 @@
    "max": 6000,
    "default": "600",
    "tuning": "per-machine",
-   "description": "Speed in RPM that the driver is allowed to use while following the position stream.  Must be at least the axis's maximum speed (max_rate_mm_per_min converted to motor RPM) or the motor will lag behind the commanded position.\n"
+   "description": "Speed in RPM that the driver is allowed to use while following the position stream.  Must be at least the axis's maximum speed (max_rate_mm_per_min converted to motor RPM) or the motor will lag behind the commanded position.  The firmware derives the required RPM from max_rate_mm_per_min, steps_per_mm and counts_per_step and raises this value if it is too low.\n"
   },
   "accel": {
    "type": "integer",
@@ -2161,7 +2226,7 @@
    "max": 200,
    "default": "200",
    "tuning": "per-machine",
-   "description": "Acceleration in revolutions/second^2 (0..200) that the driver is allowed to use while following the position stream.  The firmware streams small position increments, so a high value here keeps the motor tracking closely.\n"
+   "description": "Acceleration in revolutions/second^2 (0..200) that the driver is allowed to use while following the position stream.  The firmware streams small position increments, so a high value here keeps the motor tracking closely.  The firmware derives the required value from acceleration_mm_per_sec2, steps_per_mm and counts_per_step and raises this value if it is too low.\n"
   },
   "update_ms": {
    "type": "integer",
@@ -2178,6 +2243,114 @@
    "default": "1000",
    "tuning": "typical",
    "description": "Interval in milliseconds between driver position readbacks, used for diagnostics.  Set to 0 to disable readbacks.\n"
+  },
+  "block_targets": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "per-machine",
+   "description": "Send one final target per planner block and let the driver run its own trapezoid instead of streaming a target every update_ms.\n"
+  },
+  "max_torque_ma": {
+   "type": "integer",
+   "min": -1,
+   "max": 3000,
+   "default": "-1",
+   "tuning": "per-machine",
+   "description": "Position-loop current limit written to the driver with command 0x64.  -1 leaves the driver's existing setting untouched. Reduce it on the slave motor of a mechanically coupled pair so that it assists instead of fighting the master.\n"
+  },
+  "position_pid_p": {
+   "type": "integer",
+   "min": -1,
+   "max": 1000000,
+   "default": "-1",
+   "tuning": "per-machine",
+   "description": "Position-loop PID values written to the driver with command 0x63.  All three must be non-negative; -1 leaves the driver's existing values untouched.\n"
+  },
+  "position_pid_i": {
+   "type": "integer",
+   "min": -1,
+   "max": 1000000,
+   "default": "-1",
+   "description": ""
+  },
+  "position_pid_d": {
+   "type": "integer",
+   "min": -1,
+   "max": 1000000,
+   "default": "-1",
+   "description": ""
+  }
+ },
+ "axes.<letter>.motorN.zdt": {
+  "address": {
+   "type": "integer",
+   "min": 1,
+   "max": 16,
+   "default": "1",
+   "tuning": "per-machine",
+   "description": "CAN slave address of this Zhang Datou driver.  Must be unique on the bus and must match the address configured in the driver.\n"
+  },
+  "firmware": {
+   "type": "string",
+   "min": 1,
+   "max": 3,
+   "default": "\"Emm\"",
+   "tuning": "per-machine",
+   "description": "ZDT firmware family: Emm (pulse-based, default) or X (angle-based).\n"
+  },
+  "checksum": {
+   "type": "string",
+   "min": 2,
+   "max": 3,
+   "default": "\"6B\"",
+   "tuning": "per-machine",
+   "description": "ZDT checksum mode: 6B (fixed), XOR or CRC8.  It must match the Checksum setting in the driver.\n"
+  },
+  "counts_per_rev": {
+   "type": "integer",
+   "min": 1,
+   "max": 1000000,
+   "default": "3200",
+   "tuning": "per-machine",
+   "description": "Driver position units per motor revolution.  3200 is the factory 16-microstep value for a 1.8 degree motor.\n"
+  },
+  "counts_per_step": {
+   "type": "float",
+   "min": 1e-06,
+   "max": 1000000.0,
+   "default": "1.0",
+   "tuning": "per-machine",
+   "description": "Driver position units per FluidNC step.\n"
+  },
+  "invert_direction": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "typical",
+   "description": "Invert the direction of the streamed position deltas.\n"
+  },
+  "speed_rpm": {
+   "type": "integer",
+   "min": 1,
+   "max": 6000,
+   "default": "600",
+   "tuning": "per-machine",
+   "description": "Maximum following speed in RPM.\n"
+  },
+  "accel": {
+   "type": "integer",
+   "min": 0,
+   "max": 200,
+   "default": "80",
+   "tuning": "per-machine",
+   "description": "Driver acceleration. For Emm this is the 0..200 ramp setting; for X it is converted to RPM/s. Keep it high enough to follow the planner.\n"
+  },
+  "update_ms": {
+   "type": "integer",
+   "min": 2,
+   "max": 1000,
+   "default": "20",
+   "tuning": "typical",
+   "description": "Interval between streamed relative-position commands.\n"
   }
  },
  "axes.<letter>.motorN.unipolar": {

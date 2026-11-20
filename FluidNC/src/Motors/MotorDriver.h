@@ -84,6 +84,12 @@ namespace MotorDrivers {
         virtual void stop_motion() {}
         virtual void resume_motion() {}
 
+        // The global step coordinate changed (Stepping::reset/setSteps).
+        // Drivers that cache a mapping between the step counter and their own
+        // absolute position must invalidate that mapping and resynchronise
+        // before sending another absolute target.
+        virtual void on_stepping_reset() {}
+
         // this is used to determine if the motor can home
         // it is tested when hoing cycles are requested.
         virtual bool can_self_home() = 0;

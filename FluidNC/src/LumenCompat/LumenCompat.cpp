@@ -516,12 +516,35 @@ namespace Machine {
         if (handler.handlerType() == Configuration::HandlerType::Parser) {
             _configured = true;
         }
+        // @config top_pin
+        // @default NO_PIN
+        // @tuning per-machine
+        // WS2812B data pin for the top camera-light strip.
         handler.item("top_pin", _topPin);
+
+        // @config bottom_pin
+        // @default NO_PIN
+        // @tuning per-machine
+        // WS2812B data pin for the bottom camera-light strip.
         handler.item("bottom_pin", _bottomPin);
+
+        // @config count
+        // @default 8
+        // @tuning per-machine
+        // Number of pixels in each strip (1..8).
         handler.item("count", _count, 1, 8);
+
+        // @config startup_test
+        // @default false
+        // @tuning typical
+        // Briefly show red/green on both strips at boot.
         handler.item("startup_test", _startupTest);
 #if MAX_N_I2C
-        handler.item("i2c_bus", _i2cBus, 0, MAX_N_I2C - 1);
+        // @config i2c_bus
+        // @default 0
+        // @tuning per-machine
+        // I2C bus used by M260/M261 commands.
+        handler.item("i2c_bus", _i2cBus, 0, 1);
 #endif
     }
 }

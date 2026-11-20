@@ -13,11 +13,12 @@
 namespace Machine {
     // High-level operations used by the $CAN... and M15x command layer.
     //
-    // This is intentionally independent of the PD42S1 wire format.  A new CAN
-    // motor vendor implements this interface (or a transport-level protocol
-    // adapter plus this command interface) without touching GCode.cpp or
-    // ProcessSettings.cpp.  The existing CanBus is the PD42S1 implementation
-    // and also owns the shared TWAI transport for now.
+    // A vendor that only needs the generic command surface can implement this
+    // interface without changing GCode.cpp or ProcessSettings.cpp.  The motion
+    // path is separate: it lives in a MotorDriver / CanBusClient implementation
+    // such as MotorDrivers::ZdtMotor.  See Machine/Can/README.md for the full
+    // layering and the new-vendor checklist.  The built-in CanBus still carries
+    // the legacy PD42S1 implementation for backward compatibility.
     class CanDriver {
     public:
         virtual ~CanDriver() = default;
@@ -27,6 +28,13 @@ namespace Machine {
         // False for a driver that does not need the shared TWAI transport,
         // e.g. a command-layer stub used to validate can.driver selection.
         virtual bool uses_transport() const { return true; }
+
+        // Called after the shared TWAI transport is installed and the bus
+        // worker is running.  A driver that needs no vendor-specific startup
+        // sequence can keep the default.  This is where a non-PD42S1 driver
+        // performs its own probe/address checks instead of the PD42S1
+        // auto-configuration path.
+        virtual bool init_driver() { return true; }
 
         virtual int scan()                                        = 0;
         virtual int scan_all_bauds()                              = 0;

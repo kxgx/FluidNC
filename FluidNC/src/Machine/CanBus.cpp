@@ -150,7 +150,7 @@ namespace Machine {
 
     void CanBus::group(Configuration::HandlerBase& handler) {
         // @config driver
-        // @default pd42s1
+        // @default "pd42s1"
         // CAN motor protocol.  The command layer talks to this selection only
         // through CanDriver; adding a vendor means adding a CanDriver
         // implementation rather than editing GCode/ProcessSettings.
@@ -209,6 +209,11 @@ namespace Machine {
             Assert(false, "unknown can.driver");
         }
         CanDriver* selected = driver();
+        if (strcmp(_driverName.c_str(), "pd42s1") != 0 && selected == this) {
+            // A registered name whose factory returned null must not silently
+            // fall back to the built-in PD42S1 implementation.
+            Assert(false, "can.driver factory failed");
+        }
         if (!selected->uses_transport()) {
             return;
         }
@@ -219,12 +224,16 @@ namespace Machine {
         Assert(_tx != _rx, "CAN tx_pin and rx_pin must be different pins");
         Assert(_baud == 125000 || _baud == 250000 || _baud == 500000 || _baud == 1000000,
                "CAN baud must be 125000, 250000, 500000 or 1000000");
-        Assert(_command_id <= 0x1FFFFFFF, "CAN command_id must fit in 29 bits");
-        Assert((_command_id & 0xFFFFFFF0u) == 0x1000u, "CAN command_id must be in 0x1000..0x100F for PD42S1");
-        Assert((_groupMemberAddress == 0) == (_groupMemberGroup == 0),
-               "CAN group_member_address and group_member_group must both be set or both be 0");
-        Assert(_groupMemberAddress == 0 || _groupMemberAddress != _groupMemberGroup,
-               "CAN group_member_address must differ from group_member_group");
+        if (selected == this) {
+            // These are PD42S1-specific fields.  A standalone vendor driver
+            // defines its own frame format and does not use them.
+            Assert(_command_id <= 0x1FFFFFFF, "CAN command_id must fit in 29 bits");
+            Assert((_command_id & 0xFFFFFFF0u) == 0x1000u, "CAN command_id must be in 0x1000..0x100F for PD42S1");
+            Assert((_groupMemberAddress == 0) == (_groupMemberGroup == 0),
+                   "CAN group_member_address and group_member_group must both be set or both be 0");
+            Assert(_groupMemberAddress == 0 || _groupMemberAddress != _groupMemberGroup,
+                   "CAN group_member_address must differ from group_member_group");
+        }
     }
 
     void CanBus::init() {
@@ -234,7 +243,7 @@ namespace Machine {
             return;
         }
         if (!_driver_configured) {
-            can_log_verbose("CAN: no PD42S1 motor configured; CAN disabled");
+            can_log_verbose("CAN: no CAN motor configured; CAN disabled");
             return;
         }
         if (_ready) {
@@ -252,12 +261,31 @@ namespace Machine {
             return;
         }
 
+        if (selected != this) {
+            // Standalone vendor driver.  It owns its own probe/initialisation
+            // sequence; the PD42S1 auto-config and group-address steps must
+            // not run on a different protocol.
+            if (!install_driver()) {
+                return;
+            }
+            _auto_config_ok = true;
+            _ready          = true;
+            start_worker();
+            if (!selected->init_driver()) {
+                can_log_error("CAN: driver '" << selected->driver_name() << "' init failed");
+                _control_ready = false;
+                return;
+            }
+            can_log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " driver:" << selected->driver_name());
+            return;
+        }
+
         if (!auto_configure_drivers()) {
             return;
         }
         _ready = true;
-        apply_configured_group();
         start_worker();
+        apply_configured_group();
         can_log_info("CAN: TX:" << _tx.name() << " RX:" << _rx.name() << " baud:" << _baud << " command_id:" << uint32_t(_command_id));
     }
 
@@ -660,8 +688,8 @@ namespace Machine {
                 _clients[i]->on_position_zeroed();
             }
         }
-        apply_configured_group();
         start_worker();
+        apply_configured_group();
         log_info("CAN auto-config finished OK");
         can_log_info("CAN: auto-config finished");
         return true;
@@ -838,6 +866,15 @@ namespace Machine {
         return count;
     }
 
+    void CanBus::invalidate_client_position(uint8_t address) {
+        for (size_t i = 0; i < _n_clients; ++i) {
+            CanBusClient* client = _clients[i];
+            if (client && client->bus_address() == address) {
+                client->on_position_zeroed();
+            }
+        }
+    }
+
     void CanBus::inhibit_control(const char* reason) {
         _inhibited      = true;
         _inhibit_reason = reason;
@@ -965,6 +1002,42 @@ namespace Machine {
             offset += chunk;
         }
 
+        _last_message_end_ms = now_ms();
+        _message_sent        = true;
+        return ok;
+    }
+
+    bool CanBus::send_chunked(uint32_t base_id, const uint8_t* data, size_t len, uint32_t timeout_ms) {
+        if (!_ready || !data || !len) {
+            return false;
+        }
+        if (_message_sent) {
+            uint32_t elapsed = now_ms() - _last_message_end_ms;
+            if (elapsed < MIN_INSTRUCTION_GAP_MS) {
+                vTaskDelay(pdMS_TO_TICKS(MIN_INSTRUCTION_GAP_MS - elapsed));
+            }
+        }
+
+        bool   ok     = true;
+        size_t offset = 0;
+        uint32_t packet = 0;
+        while (offset < len) {
+            size_t chunk = len - offset;
+            if (chunk > TWAI_FRAME_MAX_DLC) {
+                chunk = TWAI_FRAME_MAX_DLC;
+            }
+            twai_message_t message   = {};
+            message.extd             = 1;
+            message.identifier       = base_id | packet;
+            message.data_length_code = chunk;
+            memcpy(message.data, data + offset, chunk);
+            if (twai_transmit(&message, pdMS_TO_TICKS(timeout_ms)) != ESP_OK) {
+                ok = false;
+                break;
+            }
+            offset += chunk;
+            ++packet;
+        }
         _last_message_end_ms = now_ms();
         _message_sent        = true;
         return ok;
@@ -1773,6 +1846,9 @@ namespace Machine {
                   Pd42s1Protocol::parse_ack(response, responseLen);
         can_log_info("CAN move: address " << int(address) << " from " << current << " to " << target
                                            << " (delta " << delta << ") " << (ok ? "ok" : "failed"));
+        if (ok) {
+            invalidate_client_position(address);
+        }
         return ok;
     }
 

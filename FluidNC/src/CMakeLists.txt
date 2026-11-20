@@ -86,6 +86,7 @@ idf_component_register(SRCS BTConfig.cpp
 							Machine/Motor.cpp
 							Machine/ProbeEventPin.cpp
 							Machine/CanBus.cpp
+							Machine/ZdtCanDriver.cpp
 							Machine/NullCanDriver.cpp
 							Machine/SPIBus.cpp
 							Machine/UserInputs.cpp
@@ -109,6 +110,8 @@ idf_component_register(SRCS BTConfig.cpp
 							Motors/TMC5160Driver.cpp
 							Motors/TMC5160ProDriver.cpp
 							Motors/TrinamicBase.cpp
+							Motors/ZdtMotor.cpp
+							Motors/ZdtProtocol.cpp
 							Motors/TrinamicSpiDriver.cpp
 							Motors/TrinamicUartDriver.cpp
 							Motors/UnipolarMotor.cpp

@@ -126,12 +126,22 @@ namespace Machine {
         // Unique slave addresses of configured clients, in client order.
         size_t client_addresses(uint8_t* out, size_t max) const;
 
+        // A maintenance command changed this driver's position outside the
+        // normal streaming path.  Ask the owning client to discard its cached
+        // position base before it sends another absolute target.
+        void invalidate_client_position(uint8_t address);
+
         // Splits one logical protocol message into 8-byte CAN data frames and
         // transmits them back-to-back.  Returns false if any frame could not
         // be queued for transmission.  Waits for MIN_INSTRUCTION_GAP_MS since
         // the end of the previous message before it transmits the first frame.
         // Callers must hold the Lock so that the pace is tracked consistently.
         bool send_message(const uint8_t* data, size_t len, uint32_t timeout_ms);
+
+        // Like send_message(), but for protocols whose extended frame ID is
+        // (address << 8) | packet.  data starts at the function code and
+        // includes the protocol checksum; base_id is (address << 8).
+        bool send_chunked(uint32_t base_id, const uint8_t* data, size_t len, uint32_t timeout_ms);
 
         // Waits for the next CAN data frame and copies its payload into buf.
         // Returns the payload length, or 0 when no frame arrived in time.
@@ -364,8 +374,10 @@ namespace Machine {
 // $CANStatus/$CANScan/... report commands use log_* directly so they still
 // print when background logging is off.
 #define can_log_info(...)  do { if (Machine::CanBus::logging_enabled()) { log_info(__VA_ARGS__); } } while (0)
-#define can_log_warn(...)  do { if (Machine::CanBus::logging_enabled()) { log_warn(__VA_ARGS__); } } while (0)
-#define can_log_error(...) do { if (Machine::CanBus::logging_enabled()) { log_error(__VA_ARGS__); } } while (0)
 #define can_log_verbose(...) do { if (Machine::CanBus::logging_enabled()) { log_verbose(__VA_ARGS__); } } while (0)
+// Errors and warnings are safety/diagnostic information and must never be
+// hidden by the verbose CAN logging switch.
+#define can_log_warn(...)  do { log_warn(__VA_ARGS__); } while (0)
+#define can_log_error(...) do { log_error(__VA_ARGS__); } while (0)
 
 #endif  // MAX_N_CAN

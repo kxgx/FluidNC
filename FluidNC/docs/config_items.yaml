@@ -336,6 +336,12 @@ spi:
 
 # CAN (TWAI) bus used to command CAN motor drivers.  The ESP32 provides only the CAN controller, so an external transceiver is required.  Present on ESP32 targets only.
 can:
+  driver:
+    type: string
+    default: '"pd42s1"'
+    description: |
+      CAN motor protocol.  The command layer talks to this selection only through CanDriver; adding a vendor means adding a CanDriver implementation rather than editing GCode/ProcessSettings.
+
   tx_pin:
     type: pin
     default: 'NO_PIN'
@@ -362,7 +368,25 @@ can:
     default: '0x1000'
     tuning: per-machine
     description: |
-      29-bit extended CAN ID used for frames sent by the controller.  The vendor's CAN examples use 0x1000, which is the PD42S1 default.  Only change this if the drivers were reprogrammed with command ID 0x6C.
+      29-bit extended CAN ID used for frames sent by the controller.  The vendor's CAN examples use 0x1000, which is the PD42S1 default.  The driver only accepts IDs in 0x1000..0x100F; validate() enforces that. Only change this if the drivers were reprogrammed with command ID 0x6C.
+
+  group_member_address:
+    type: integer
+    min: 0
+    max: 255
+    default: '0'
+    tuning: per-machine
+    description: |
+      Optional slave address of a driver that should be switched to group-address mode at boot.  0 disables the feature.
+
+  group_member_group:
+    type: integer
+    min: 0
+    max: 255
+    default: '0'
+    tuning: per-machine
+    description: |
+      Group address for group_member_address.  Both fields must be non-zero and different to enable the feature.
 
 i2cN:
   sda_pin:
@@ -561,6 +585,47 @@ user_outputs:
     pin_attributes: output
     description: |
       Digital output slot 7.
+
+# LumenPnP-compatible M150 camera-light strips, M106/M107 aux outputs and the M114/M115/M204/M400/M260/M261 command shims.  The top and bottom strips are WS2812B, 8 pixels each.
+lumen:
+  top_pin:
+    type: pin
+    default: 'NO_PIN'
+    tuning: per-machine
+    description: |
+      WS2812B data pin for the top camera-light strip.
+
+  bottom_pin:
+    type: pin
+    default: 'NO_PIN'
+    tuning: per-machine
+    description: |
+      WS2812B data pin for the bottom camera-light strip.
+
+  count:
+    type: integer
+    min: 1
+    max: 8
+    default: '8'
+    tuning: per-machine
+    description: |
+      Number of pixels in each strip (1..8).
+
+  startup_test:
+    type: boolean
+    default: 'false'
+    tuning: typical
+    description: |
+      Briefly show red/green on both strips at boot.
+
+  i2c_bus:
+    type: integer
+    min: 0
+    max: 1
+    default: '0'
+    tuning: per-machine
+    description: |
+      I2C bus used by M260/M261 commands.
 
 uartN:
   txd_pin:
@@ -2279,11 +2344,20 @@ axes.<letter>.motorN.pd42s1:
   address:
     type: integer
     min: 1
-    max: 255
+    max: 16
     default: '1'
     tuning: per-machine
     description: |
-      CAN slave address of this driver, 1..255.  Must match the value written to the driver with setting 0x60 (set slave address). Address 0 is the broadcast address and cannot be used here.
+      CAN slave address of this driver.  Must be unique and match the value written to the driver with setting 0x60 (set slave address). Address 0 is broadcast; this firmware supports MAX_CLIENTS (16) configured CAN motors.
+
+  sync_group:
+    type: integer
+    min: 0
+    max: 255
+    default: '0'
+    tuning: per-machine
+    description: |
+      Optional position-update group. Motors with the same non-zero sync_group have their absolute-position targets sent back-to-back from one CAN worker pass. Each motor still applies its own invert_direction, so direction configuration is unchanged. 0 disables grouping (normal independent streaming).
 
   counts_per_step:
     type: float
@@ -2336,6 +2410,126 @@ axes.<letter>.motorN.pd42s1:
     tuning: typical
     description: |
       Interval in milliseconds between driver position readbacks, used for diagnostics.  Set to 0 to disable readbacks.
+
+  block_targets:
+    type: boolean
+    default: 'false'
+    tuning: per-machine
+    description: |
+      Send one final target per planner block and let the driver run its own trapezoid instead of streaming a target every update_ms.
+
+  max_torque_ma:
+    type: integer
+    min: -1
+    max: 3000
+    default: '-1'
+    tuning: per-machine
+    description: |
+      Position-loop current limit written to the driver with command 0x64.  -1 leaves the driver's existing setting untouched. Reduce it on the slave motor of a mechanically coupled pair so that it assists instead of fighting the master.
+
+  position_pid_p:
+    type: integer
+    min: -1
+    max: 1000000
+    default: '-1'
+    tuning: per-machine
+    description: |
+      Position-loop PID values written to the driver with command 0x63.  All three must be non-negative; -1 leaves the driver's existing values untouched.
+
+  position_pid_i:
+    type: integer
+    min: -1
+    max: 1000000
+    default: '-1'
+    description: |
+
+  position_pid_d:
+    type: integer
+    min: -1
+    max: 1000000
+    default: '-1'
+    description: |
+
+# Zhang Datou XS-series closed-loop stepper commanded over CAN.  Supports the Emm and X firmware command families and the driver's 6B/XOR/CRC8 checksum modes.  Requires a can: section and a unique bus address.
+axes.<letter>.motorN.zdt:
+  address:
+    type: integer
+    min: 1
+    max: 16
+    default: '1'
+    tuning: per-machine
+    description: |
+      CAN slave address of this Zhang Datou driver.  Must be unique on the bus and must match the address configured in the driver.
+
+  firmware:
+    type: string
+    min: 1
+    max: 3
+    default: '"Emm"'
+    tuning: per-machine
+    description: |
+      ZDT firmware family: Emm (pulse-based, default) or X (angle-based).
+
+  checksum:
+    type: string
+    min: 2
+    max: 3
+    default: '"6B"'
+    tuning: per-machine
+    description: |
+      ZDT checksum mode: 6B (fixed), XOR or CRC8.  It must match the Checksum setting in the driver.
+
+  counts_per_rev:
+    type: integer
+    min: 1
+    max: 1000000
+    default: '3200'
+    tuning: per-machine
+    description: |
+      Driver position units per motor revolution.  3200 is the factory 16-microstep value for a 1.8 degree motor.
+
+  counts_per_step:
+    type: float
+    min: 1.0e-06
+    max: 1000000.0
+    default: '1.0'
+    tuning: per-machine
+    description: |
+      Driver position units per FluidNC step.
+
+  invert_direction:
+    type: boolean
+    default: 'false'
+    tuning: typical
+    description: |
+      Invert the direction of the streamed position deltas.
+
+  speed_rpm:
+    type: integer
+    min: 1
+    max: 6000
+    default: '600'
+    tuning: per-machine
+    description: |
+      Maximum following speed in RPM.
+
+  accel:
+    type: integer
+    min: 0
+    max: 200
+    default: '80'
+    tuning: per-machine
+    description: |
+      Driver acceleration. For Emm this is the 0..200 ramp setting; for X it is converted to RPM/s. Keep it high enough to follow the planner.
+
+  update_ms:
+    type: integer
+    min: 2
+    max: 1000
+    default: '20'
+    tuning: typical
+    description: |
+      Interval between streamed relative-position commands.
 
 # Reversing a unipolar axis means swapping the phase pin assignments -- phase0 with phase3 and phase1 with phase2. There is no direction pin to mark :low, and the driver applies no direction inversion of its own.
 axes.<letter>.motorN.unipolar:

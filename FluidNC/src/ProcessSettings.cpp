@@ -37,6 +37,7 @@
 #endif
 
 #include <cstdlib>  // std::abs
+#include <cerrno>
 #include <cstring>
 #include <string_view>
 #include <map>
@@ -1366,9 +1367,13 @@ static Error can_move(const char* value, AuthenticationLevel auth_level, Channel
         return Error::InvalidValue;
     }
     const char* second = end + 1;
-    const long  delta  = strtol(second, &end, 10);
-    if (end == second || *end != '\0' || address < 1 || address > int(Machine::CanBus::MAX_CLIENTS) || delta == 0) {
-        log_info("CAN move: invalid address/delta (address 1.." << int(Machine::CanBus::MAX_CLIENTS) << ")");
+    errno              = 0;
+    const long delta   = strtol(second, &end, 10);
+    constexpr long MAX_DIAGNOSTIC_DELTA = 1000000000L;
+    if (end == second || *end != '\0' || errno == ERANGE || address < 1 || address > int(Machine::CanBus::MAX_CLIENTS) ||
+        delta == 0 || std::abs(delta) > MAX_DIAGNOSTIC_DELTA) {
+        log_info("CAN move: invalid address/delta (address 1.." << int(Machine::CanBus::MAX_CLIENTS)
+                 << ", |delta| <= " << MAX_DIAGNOSTIC_DELTA << ")");
         return Error::InvalidValue;
     }
     if (!config->_can->driver()->send_single_position(uint8_t(address), int32_t(delta), 100, 50)) {
@@ -1500,6 +1505,12 @@ static Error can_stop(const char* value, AuthenticationLevel auth_level, Channel
     if (!config->_can->driver()->stop_all_drivers()) {
         log_info("CAN stop: not all drivers verified disabled; bus remains latched");
         return Error::InvalidValue;
+    }
+    // If this was issued during motion, the planner would otherwise keep
+    // consuming G-code after the motors have been disabled, silently losing
+    // the corresponding travel.  Stop the job as a safety action.
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        send_alarm(ExecAlarm::HardStop);
     }
     return Error::Ok;
 }

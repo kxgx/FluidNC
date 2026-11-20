@@ -91,7 +91,16 @@ namespace Machine {
         static void init();
 
         static steps_t getSteps(axis_t axis) { return axis_steps[axis]; }
-        static void    setSteps(axis_t axis, steps_t steps) { axis_steps[axis] = steps; }
+        static void    setSteps(axis_t axis, steps_t steps) {
+            axis_steps[axis] = steps;
+            notifyStepCoordinateChanged();
+        }
+
+        // Notifies motor drivers that the step counter was reset or assigned a
+        // new value.  Closed-loop CAN motors cache the step count at which
+        // their absolute position was sampled, so they must rebuild that
+        // mapping before the next target is sent.
+        static void notifyStepCoordinateChanged();
 
         static void assignMotor(axis_t axis, motor_t motor, pinnum_t step_pin, bool step_invert, pinnum_t dir_pin, bool dir_invert);
 

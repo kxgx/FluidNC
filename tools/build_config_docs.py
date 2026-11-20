@@ -45,6 +45,13 @@ SECTIONS = [
     ("i2so", [("Machine/I2SOBus.cpp", "I2SOBus")], None),
     ("sdcard", [("SDCard.h", "SDCard")], None),
     ("user_outputs", [("Machine/UserOutputs.cpp", "UserOutputs")], None),
+    (
+        "lumen",
+        [("LumenCompat/LumenCompat.cpp", "LumenCompat")],
+        "LumenPnP-compatible M150 camera-light strips, M106/M107 aux outputs and the "
+        "M114/M115/M204/M400/M260/M261 command shims.  The top and bottom strips are "
+        "WS2812B, 8 pixels each.",
+    ),
     ("uartN", [("Uart.cpp", "Uart")], None),
     (
         "uartN.usb_host",
@@ -135,6 +142,13 @@ SECTIONS = [
         "ALIENTEK PD42S1 closed-loop stepper driver commanded over CAN.  Requires a can: section "
         "and a driver address that matches the value programmed with the vendor's 0x60 command.  "
         "Present on ESP32 targets only.",
+    ),
+    (
+        "axes.<letter>.motorN.zdt",
+        [("Motors/ZdtMotor.h", "ZdtMotor")],
+        "Zhang Datou XS-series closed-loop stepper commanded over CAN.  Supports the Emm "
+        "and X firmware command families and the driver's 6B/XOR/CRC8 checksum modes.  "
+        "Requires a can: section and a unique bus address.",
     ),
     (
         "axes.<letter>.motorN.unipolar",

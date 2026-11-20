@@ -26,11 +26,18 @@
 #include <vector>
 
 #if MAX_N_CAN
-static void execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
+static Error execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
     auto* can = (config && config->_can) ? config->_can->driver() : nullptr;
     if (!can) {
         log_info("CAN: no can: section configured");
-        return;
+        return Error::Ok;
+    }
+    // These commands can disable/reconfigure all drivers.  Never run them from
+    // the middle of a job, jog or homing cycle; the equivalent $CAN... commands
+    // use the same state gate.
+    if (!state_is(State::Idle) && !state_is(State::Alarm)) {
+        log_error("CAN M" << int(code) << ": only allowed in Idle or Alarm");
+        return Error::InvalidValue;
     }
     switch (code) {
         case 150:
@@ -55,28 +62,27 @@ static void execute_can_mcode(uint8_t code, int32_t p, int32_t q) {
             can->enable_all_driver_echo();
             break;
         case 157:
-            can->stop_all_drivers();
-            break;
+            return can->stop_all_drivers() ? Error::Ok : Error::InvalidValue;
         case 158:
             can->restart_drivers();
             break;
         case 159:
             if (p < 1 || p > 255 || q < 0 || q > 255) {
                 log_info("CAN M159: P = address (1..255), Q = function code (0..255)");
-                break;
+                return Error::InvalidValue;
             }
             can->read_raw(uint8_t(p), uint8_t(q));
             break;
         case 160:
-            can->run_auto_config();
-            break;
+            return can->run_auto_config() ? Error::Ok : Error::InvalidValue;
         case 161:
             can->report_driver_configs();
             break;
         default:
             log_info("CAN: unknown M" << int(code));
-            break;
+            return Error::InvalidValue;
     }
+    return Error::Ok;
 }
 #endif
 
@@ -1957,8 +1963,7 @@ Error gc_execute_line(const char* input_line, Channel& channel) {
         const int32_t q    = int32_t(gc_block.values.q);
         gc_block.can_mcode = 0;
         protocol_buffer_synchronize();
-        execute_can_mcode(code, p, q);
-        return Error::Ok;
+        return execute_can_mcode(code, p, q);
     }
 #endif
     // [0. Non-specific/common error-checks and miscellaneous setup]:

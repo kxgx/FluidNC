@@ -2,6 +2,8 @@
 #include "EnumItem.h"
 #include "Stepping.h"
 #include "Machine/MachineConfig.h"  // config
+#include "Machine/Axes.h"
+#include "Machine/Motor.h"
 #include "Motors/MotorDriver.h"     // MotorDrivers::MotorDriver
 
 #include <atomic>
@@ -212,10 +214,29 @@ void IRAM_ATTR Stepping::unstep() {
     _engine->finish_unstep();
 }
 
+void Stepping::notifyStepCoordinateChanged() {
+    if (!config || !config->_axes) {
+        return;
+    }
+    for (axis_t axis = X_AXIS; axis < MAX_N_AXIS; ++axis) {
+        auto* a = Axes::_axis[axis];
+        if (!a) {
+            continue;
+        }
+        for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
+            auto* m = a->_motors[motor];
+            if (m && m->_driver) {
+                m->_driver->on_stepping_reset();
+            }
+        }
+    }
+}
+
 void Stepping::reset() {
     for (axis_t axis = X_AXIS; axis < MAX_N_AXIS; ++axis) {
         axis_steps[axis] = 0;
     }
+    notifyStepCoordinateChanged();
 }
 void Stepping::beginLowLatency() {}
 void Stepping::endLowLatency() {}
