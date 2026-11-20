@@ -22,7 +22,7 @@
 
 #if MAX_N_CAN
 
-#    include "Machine/CanBus.h"
+#    include "Can/CanBus.h"
 #    include <vector>
 
 namespace MotorDrivers {
@@ -269,4 +269,5 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
+
 

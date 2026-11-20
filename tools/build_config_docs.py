@@ -37,7 +37,7 @@ SECTIONS = [
     ("spi", [("Machine/SPIBus.cpp", "SPIBus")], None),
     (
         "can",
-        [("Machine/CanBus.cpp", "CanBus")],
+        [("Can/CanBus.cpp", "CanBus")],
         "CAN (TWAI) bus used to command CAN motor drivers.  The ESP32 provides only the CAN "
         "controller, so an external transceiver is required.  Present on ESP32 targets only.",
     ),

@@ -8,7 +8,7 @@
 #    include "Pd42s1Motor.h"
 
 #    include "Machine/MachineConfig.h"
-#    include "Motors/Pd42s1Protocol.h"
+#    include "Can/Drivers/Pd42s1/Pd42s1Protocol.h"
 #    include "Stepping.h"
 #    include "Protocol.h"
 #    include "Machine/Axes.h"
@@ -973,3 +973,4 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
+

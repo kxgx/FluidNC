@@ -34,7 +34,7 @@
 #include "SPIBus.h"
 #include "I2CBus.h"
 #include "I2SOBus.h"
-#include "CanBus.h"
+#include "Can/CanBus.h"
 #include "LumenCompat/LumenCompat.h"
 #include "UserOutputs.h"
 #include "UserInputs.h"
@@ -203,3 +203,4 @@ template <typename D, typename S>
 void subtractAxes(D* dest, S* src) {
     subtractAxes(dest, src, Axes::_numberAxis);
 }
+

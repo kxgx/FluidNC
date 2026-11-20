@@ -7,9 +7,9 @@
 
 #if MAX_N_CAN
 
-#    include "Machine/CanBus.h"
+#    include "Can/CanBus.h"
 #    include "Motors/MotorDriver.h"
-#    include "Motors/ZdtProtocol.h"
+#    include "Can/Drivers/Zdt/ZdtProtocol.h"
 
 #    include <string>
 
@@ -149,3 +149,5 @@ namespace MotorDrivers {
 }
 
 #endif
+
+

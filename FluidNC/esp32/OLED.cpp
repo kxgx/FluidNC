@@ -2,7 +2,7 @@
 #include "string_util.h"
 
 #include "Machine/MachineConfig.h"
-#include "Machine/CanBus.h"
+#include "Can/CanBus.h"
 
 void OLED::show(Layout& layout, const char* msg) {
     if (_width < layout._width_required) {

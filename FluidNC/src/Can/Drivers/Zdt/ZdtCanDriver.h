@@ -7,8 +7,8 @@
 
 #if MAX_N_CAN
 
-#    include "CanDriver.h"
-#    include "CanBus.h"
+#    include "Can/CanDriver.h"
+#    include "Can/CanBus.h"
 
 namespace Machine {
     // Command/diagnostic facade for the Zhang Datou XS CAN protocol.  The
@@ -51,3 +51,5 @@ namespace Machine {
 }
 
 #endif
+
+

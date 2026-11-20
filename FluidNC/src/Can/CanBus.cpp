@@ -9,7 +9,7 @@
 #    include "CanDriverRegistry.h"
 
 #    include "Logging.h"
-#    include "Motors/Pd42s1Protocol.h"
+#    include "Can/Drivers/Pd42s1/Pd42s1Protocol.h"
 
 #    include <Arduino.h>
 #    include <driver/twai.h>
@@ -2209,3 +2209,4 @@ namespace Machine {
 }
 
 #endif  // MAX_N_CAN
+
