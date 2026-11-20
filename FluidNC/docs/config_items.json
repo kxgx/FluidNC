@@ -965,6 +965,28 @@
    "tuning": "typical",
    "description": "When true, a move that would exceed max_travel_mm is aborted before it starts; jogs are instead constrained to stop at the travel limit rather than alarming. Relies on accurate machine position, so the axis should be homed first -- always home before jogging or running GCode when soft limits are enabled.\n"
   },
+  "use_soft_limit_range": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "per-machine",
+   "description": "When true, use the explicit soft_limit_min_mm / soft_limit_max_mm range instead of deriving the range from homing.mpos_mm and max_travel_mm. The explicit range is an absolute machine-coordinate range, so a homed position of 0 can have travel on both the negative and positive sides.\n"
+  },
+  "soft_limit_min_mm": {
+   "type": "float",
+   "min": -10000000.0,
+   "max": 10000000.0,
+   "default": "0.0",
+   "tuning": "per-machine",
+   "description": "Absolute machine-coordinate lower bound used when use_soft_limit_range is true.\n"
+  },
+  "soft_limit_max_mm": {
+   "type": "float",
+   "min": -10000000.0,
+   "max": 10000000.0,
+   "default": "0.0",
+   "tuning": "per-machine",
+   "description": "Absolute machine-coordinate upper bound used when use_soft_limit_range is true.\n"
+  },
   "idle_disable": {
    "type": "boolean",
    "default": "true",

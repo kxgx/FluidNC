@@ -135,20 +135,26 @@ void limit_error() {
 
 float limitsMaxPosition(axis_t axis) {
     auto axisConfig = Axes::_axis[axis];
-    auto homing     = axisConfig->_homing;
-    auto mpos       = homing ? homing->_mpos : 0;
-    auto maxtravel  = axisConfig->_maxTravel;
     auto slop       = 1.0F / axisConfig->_stepsPerMm;
+    if (axisConfig->_useSoftLimitRange) {
+        return axisConfig->_softLimitMax + slop;
+    }
+    auto homing = axisConfig->_homing;
+    auto mpos   = homing ? homing->_mpos : 0;
+    auto maxtravel = axisConfig->_maxTravel;
 
     return ((!homing || homing->_positiveDirection) ? mpos : mpos + maxtravel) + slop;
 }
 
 float limitsMinPosition(axis_t axis) {
     auto axisConfig = Axes::_axis[axis];
-    auto homing     = axisConfig->_homing;
-    auto mpos       = homing ? homing->_mpos : 0;
-    auto maxtravel  = axisConfig->_maxTravel;
     auto slop       = 1.0F / axisConfig->_stepsPerMm;
+    if (axisConfig->_useSoftLimitRange) {
+        return axisConfig->_softLimitMin - slop;
+    }
+    auto homing = axisConfig->_homing;
+    auto mpos   = homing ? homing->_mpos : 0;
+    auto maxtravel = axisConfig->_maxTravel;
 
     return ((!homing || homing->_positiveDirection) ? mpos - maxtravel : mpos) - slop;
 }

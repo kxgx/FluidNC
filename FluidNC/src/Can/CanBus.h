@@ -138,8 +138,18 @@ namespace Machine {
         // homing while the worker is absent, driver init/auto-config failed,
         // a stop is latched, or control has been inhibited.  Diagnostics are
         // deliberately not gated by this.
+        bool all_clients_synced() const {
+            for (size_t i = 0; i < _n_clients; ++i) {
+                if (_clients[i] && !_clients[i]->is_synced()) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         bool motion_ready() const {
-            return _control_ready && _task_handle != nullptr && !_stop_latched.load(std::memory_order_acquire) && !_inhibited;
+            return _control_ready && _task_handle != nullptr && !_stop_latched.load(std::memory_order_acquire) && !_inhibited &&
+                   all_clients_synced();
         }
 
         bool stop_latched() const { return _stop_latched.load(std::memory_order_acquire); }

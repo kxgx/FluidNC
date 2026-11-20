@@ -47,6 +47,27 @@ namespace Machine {
         // home before jogging or running GCode when soft limits are enabled.
         handler.item("soft_limits", _softLimits);
 
+        // @config use_soft_limit_range
+        // @default false
+        // @tuning per-machine
+        // When true, use the explicit soft_limit_min_mm / soft_limit_max_mm range
+        // instead of deriving the range from homing.mpos_mm and max_travel_mm.
+        // The explicit range is an absolute machine-coordinate range, so a homed
+        // position of 0 can have travel on both the negative and positive sides.
+        handler.item("use_soft_limit_range", _useSoftLimitRange);
+
+        // @config soft_limit_min_mm
+        // @default 0.0
+        // @tuning per-machine
+        // Absolute machine-coordinate lower bound used when use_soft_limit_range is true.
+        handler.item("soft_limit_min_mm", _softLimitMin, -10000000.0, 10000000.0);
+
+        // @config soft_limit_max_mm
+        // @default 0.0
+        // @tuning per-machine
+        // Absolute machine-coordinate upper bound used when use_soft_limit_range is true.
+        handler.item("soft_limit_max_mm", _softLimitMax, -10000000.0, 10000000.0);
+
         // @config idle_disable
         // @default true
         // Whether this axis participates in stepping.idle_ms auto-disable. Set to false to

@@ -43,12 +43,18 @@ namespace MotorDrivers {
         uint8_t bus_address() const override { return uint8_t(_address); }
         bool    is_synced() const override { return _synced; }
         void    on_position_zeroed() override;
-        void    on_stepping_reset() override { on_position_zeroed(); }
+        void    on_stepping_reset() override;
+        void    on_step_coordinate_changed() override { on_position_zeroed(); }
         void    on_diagnostic_complete() override;
         void    set_axis(axis_t axis) override { _axis = axis; }
         void    set_block_target(axis_t axis, int32_t targetSteps, float feedMmMin, float accelMmSec2) override;
         void    stop_motion() override;
         void    resume_motion() override;
+        void    hold_at_limit() override {
+            _holdRequestMs  = 0;
+            _holdFailures   = 0;
+            _holdRequested  = true;
+        }
 
         // Step ISR entry points.  These are non-virtual and IRAM_ATTR for the
         // same reason as UnipolarMotor's: the linker puts virtual function
@@ -178,6 +184,7 @@ namespace MotorDrivers {
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs, uint8_t attempts);
         bool clear_fault();
         void     apply_disable(uint32_t nowMs);
+        void     apply_hold_at_limit(uint32_t nowMs);
         bool     send_target(uint32_t target, uint32_t timeoutMs);
         bool     send_target_nowait(uint32_t target);
         bool     send_target_nowait_locked(uint32_t target);
@@ -186,6 +193,7 @@ namespace MotorDrivers {
         void     register_instance();
         void     unregister_instance();
         bool     is_sync_group_leader() const;
+        bool     sync_group_ready() const;
         void     send_sync_group_targets(uint32_t nowMs);
         void     report_driver_fault(const char* reason);
         void     poll_position();
@@ -206,6 +214,8 @@ namespace MotorDrivers {
         uint32_t _statusPollMs    = 1000;
         int32_t  _maxTorqueMa     = -1;
         bool     _blockTargets    = false;
+        bool     _groupFaulted    = false;
+        uint32_t _groupNotReadySinceMs = 0;
         axis_t   _axis            = X_AXIS;
         bool     _blockTargetValid = false;
         uint32_t _blockTarget      = 0;
@@ -233,8 +243,9 @@ namespace MotorDrivers {
         volatile uint32_t _disableGeneration = 0;
 
         // CAN task state
-        bool     _synced         = false;
-        bool     _everSynced     = false;  // first sync adopts the driver position
+        bool     _synced              = false;
+        bool     _everSynced          = false;  // first sync adopts the driver position
+        bool     _adoptPositionOnSync = false;  // next sync adopts the driver position
         bool     _online         = false;
         bool     _disabled       = false;
         uint32_t _nextSyncMs     = 0;
@@ -248,6 +259,9 @@ namespace MotorDrivers {
         uint32_t _lastTargetChangeMs = 0;
         bool     _finalTargetAcked   = false;
         bool     _targetDirty    = true;
+        volatile bool _holdRequested = false;
+        uint32_t      _holdRequestMs = 0;
+        uint32_t      _holdFailures  = 0;
         int32_t  _driverPosition = 0;
 
         // Consecutive failed transactions.  A marginal CAN bus drops the odd

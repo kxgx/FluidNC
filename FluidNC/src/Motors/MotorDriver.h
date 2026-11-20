@@ -84,11 +84,25 @@ namespace MotorDrivers {
         virtual void stop_motion() {}
         virtual void resume_motion() {}
 
-        // The global step coordinate changed (Stepping::reset/setSteps).
-        // Drivers that cache a mapping between the step counter and their own
-        // absolute position must invalidate that mapping and resynchronise
-        // before sending another absolute target.
+        // A homing limit was just hit.  The step engine is stopped before this
+        // is requested; closed-loop drivers should latch a request and have
+        // their own worker hold the present drive position without blocking
+        // the protocol/event task.
+        virtual void hold_at_limit() {}
+
+        // Stepping::reset() is about to clear the step counters back to zero.
+        // This is a coordinate-reset event, not a machine-coordinate change:
+        // absolute-position drivers should preserve their target by rebasing
+        // their cached step origin, without re-reading the drive position.
         virtual void on_stepping_reset() {}
+
+        // Stepping::setSteps() changed the machine step coordinate directly
+        // (for example after homing completed).  Drivers that cache a mapping
+        // between the step counter and their own absolute position must
+        // invalidate that mapping and resynchronise before sending another
+        // absolute target.  The default preserves the historical reset
+        // behavior for drivers that do not distinguish the two events.
+        virtual void on_step_coordinate_changed() { on_stepping_reset(); }
 
         // this is used to determine if the motor can home
         // it is tested when hoing cycles are requested.

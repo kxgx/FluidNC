@@ -80,6 +80,7 @@ namespace Machine {
         static void set_disable(bool disable, bool manual_override);
         static void stop_motion();
         static void resume_motion();
+        static void hold_at_limit();
         static void config_motors();
 
         static std::string maskToNames(AxisMask mask);

@@ -82,6 +82,17 @@ namespace Machine {
         }
     }
 
+    void Axes::hold_at_limit() {
+        for (axis_t axis = X_AXIS; axis < _numberAxis; ++axis) {
+            for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
+                auto m = _axis[axis]->_motors[motor];
+                if (m && m->_driver) {
+                    m->_driver->hold_at_limit();
+                }
+            }
+        }
+    }
+
     void Axes::resume_motion() {
         for (axis_t axis = X_AXIS; axis < _numberAxis; ++axis) {
             for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {

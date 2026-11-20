@@ -37,6 +37,14 @@ namespace Machine {
         bool  _softLimits   = false;
         bool  _idleDisable  = true;
 
+        // Optional independent soft-limit range.  When enabled, limitsMinPosition()
+        // and limitsMaxPosition() use these absolute machine coordinates instead of
+        // deriving the range from homing.mpos_mm and max_travel_mm.  This allows a
+        // homed position of 0 with travel on both sides of it.
+        bool  _useSoftLimitRange = false;
+        float _softLimitMin      = 0.0f;
+        float _softLimitMax      = 0.0f;
+
         // Configuration system helpers:
         void group(Configuration::HandlerBase& handler) override;
         void afterParse() override;

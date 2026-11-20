@@ -192,7 +192,12 @@ namespace Machine {
         // complete the homing cycle for this set of axes.
 
         if (stop) {
+            // Stop the step engine first so no more segment steps are emitted,
+            // then request a worker-side hold from closed-loop CAN drives.  The
+            // worker reads the actual drive position, rebases its target mapping
+            // and sends that position as the new hold target.
             Stepper::reset();  // Stop moving
+            Axes::hold_at_limit();
 
             if (_phaseAxes) {
                 log_debug("Homing replan with " << Axes::maskToNames(_phaseAxes));

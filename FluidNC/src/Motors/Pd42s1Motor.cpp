@@ -15,6 +15,7 @@
 
 #    include <esp_timer.h>
 
+#    include <algorithm>
 #    include <cmath>
 #    include <cstdio>
 #    include <cstring>
@@ -27,6 +28,10 @@ namespace MotorDrivers {
     // Crossing this boundary would otherwise turn a large positive target into
     // a negative direction request (or vice versa).
     static constexpr int32_t TARGET_SAFE_LIMIT = 1000000000;
+
+    static bool motion_state_active() {
+        return state_is(State::Cycle) || state_is(State::Homing) || state_is(State::Jog) || state_is(State::Hold);
+    }
 
     // Static registry for sync_group batching.  Configuration is loaded before
     // the CAN worker starts, so no lock is needed here.
@@ -56,13 +61,32 @@ namespace MotorDrivers {
         }
     }
 
+    bool Pd42s1Motor::sync_group_ready() const {
+        if (_syncGroup == 0) {
+            return true;
+        }
+        // A mechanically coupled group must be fail-closed: if any configured
+        // member is not ready, no member may receive a new target.  Allowing
+        // the remaining motors to continue would twist the gantry.
+        for (Pd42s1Motor* m : _instances) {
+            if (m->_syncGroup != _syncGroup) {
+                continue;
+            }
+            if (!m->_synced || m->_disabled || m->_disablePending) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool Pd42s1Motor::is_sync_group_leader() const {
         if (_syncGroup == 0) {
             return true;
         }
-        // The lowest-addressed *active* member of the group is the sender.
-        // If that motor is missing or disabled, the next member takes over
-        // instead of leaving the whole group without position updates.
+        if (!sync_group_ready()) {
+            return false;
+        }
+        // The lowest-addressed ready member of the group is the sender.
         const Pd42s1Motor* leader = nullptr;
         for (Pd42s1Motor* m : _instances) {
             if (m->_syncGroup != _syncGroup || !m->_synced || m->_disabled) {
@@ -76,6 +100,9 @@ namespace MotorDrivers {
     }
 
     void Pd42s1Motor::send_sync_group_targets(uint32_t nowMs) {
+        if (_syncGroup != 0 && !sync_group_ready()) {
+            return;
+        }
         if (!_bus || !_bus->ready()) {
             return;
         }
@@ -193,6 +220,10 @@ namespace MotorDrivers {
         Assert(_speedRpm >= 1 && _speedRpm <= 6000, "pd42s1 speed_rpm must be 1..6000");
         Assert(_accel >= 0 && _accel <= 200, "pd42s1 accel must be 0..200");
         Assert(_updateMs >= 2 && _updateMs <= 1000, "pd42s1 update_ms must be 2..1000");
+        // The block_targets path mixes planner axis coordinates with the
+        // per-motor step counter and has no safe stop path on limit/alarm.
+        // Keep it disabled until a separate, verified implementation exists.
+        Assert(!_blockTargets, "pd42s1 block_targets is currently disabled; use streaming mode");
 
         // Derive the driver RPM and acceleration silently from the axis
         // settings.  The G-code/planner side is untouched; this keeps the
@@ -202,7 +233,9 @@ namespace MotorDrivers {
         //   driver units/mm = steps_per_mm * counts_per_step
         //   driver units/min = max_rate_mm_per_min * driver units/mm
         //   driver RPM = driver units/min / 51200
-        auto  axisConfig  = Axes::_axis[axis_index()];
+        auto axisConfig = Axes::_axis[axis_index()];
+        Assert(!(_blockTargets && axisConfig->hasDualMotor()),
+               "pd42s1 block_targets is not supported on a dual-motor axis; use streaming mode");
         float requiredRpm = axisConfig->_maxRate * axisConfig->_stepsPerMm * _countsPerStep / 51200.0f;
         if (requiredRpm > 6000.0f) {
             _speedRpm = 6000;
@@ -242,6 +275,12 @@ namespace MotorDrivers {
         _disableRequested  = disable;
         _disableGeneration = _disableGeneration + 1;
         _disablePending    = true;
+        // A fresh request must be applied on the next worker pass.  The
+        // 500 ms throttle is only for retrying a failed transaction.
+        _nextDisableMs = 0;
+        if (disable) {
+            _holdRequested = false;
+        }
     }
 
     void IRAM_ATTR Pd42s1Motor::set_direction_isr(bool dir) {
@@ -249,7 +288,11 @@ namespace MotorDrivers {
     }
 
     void IRAM_ATTR Pd42s1Motor::step_isr() {
-        _stepCount += _direction ? 1 : -1;
+        // Direction bit 1 means negative, matching Stepping::step()'s
+        // axis_steps convention.  Keep this motor's counter in the same sign
+        // convention as the axis counter so target_position() preserves the
+        // historically verified direction semantics.
+        _stepCount += _direction ? -1 : 1;
     }
 
     IsrStepFn Pd42s1Motor::isr_step_fn() {
@@ -265,7 +308,11 @@ namespace MotorDrivers {
         // the driver base position but the hardware step counter keeps
         // counting.  Subtracting the counter value captured at the last sync
         // keeps the target continuous across resyncs.
-        int64_t steps  = int64_t(Stepping::getSteps(_axis)) - int64_t(_baseStepCount);
+        // Use this motor's own step counter, not the shared axis counter.
+        // Stepping::step() increments the axis counter even when this motor is
+        // blocked or limited; using it here would stream a target past a limit
+        // even though step_fn() was never called for this motor.
+        int64_t steps  = int64_t(_stepCount) - int64_t(_baseStepCount);
         double  scaled = double(steps) * double(_countsPerStep);
         if (_invertDirection) {
             scaled = -scaled;
@@ -475,7 +522,7 @@ namespace MotorDrivers {
 
         const bool hadBlockTarget = _blockTargetValid;
         _basePosition     = uint32_t(position);
-        _baseStepCount    = Stepping::getSteps(_axis);
+        _baseStepCount    = _stepCount;
         _lastTarget       = _basePosition;
         _driverPosition   = position;
         _targetDirty      = true;
@@ -562,14 +609,20 @@ namespace MotorDrivers {
         // On a resync after a lost command/error, keep the current desired
         // target instead of adopting the driver's (possibly lagging) position,
         // otherwise the axis would silently stop short of the commanded move.
-        const uint32_t continuityTarget = _everSynced ? target_position() : 0;
+        // A machine-coordinate zero (on_position_zeroed) explicitly asks the
+        // next sync to adopt the drive position instead.
+        const bool     adoptPosition     = !_everSynced || _adoptPositionOnSync;
+        const uint32_t continuityTarget  = adoptPosition ? 0 : target_position();
 
-        _basePosition     = _everSynced ? continuityTarget : uint32_t(position);
-        _baseStepCount    = Stepping::getSteps(_axis);
-        _lastTarget       = _basePosition;
-        _driverPosition   = position;
-        _targetDirty      = true;
-        _blockTargetValid = false;
+        _basePosition         = adoptPosition ? uint32_t(position) : continuityTarget;
+        _baseStepCount        = _stepCount;
+        _lastTarget           = _basePosition;
+        _driverPosition       = position;
+        _targetDirty          = true;
+        _blockTargetValid     = false;
+        _adoptPositionOnSync  = false;
+        _everSynced           = true;
+        _holdRequested        = false;
         if (syncGen == _disableGeneration) {
             _disabled       = syncDisable;
             _disablePending = false;
@@ -745,14 +798,14 @@ namespace MotorDrivers {
             _readFailures   = 0;
             can_log_verbose("CAN: " << name() << " driver position:" << position << " target:" << int32_t(_lastTarget));
         } else {
+            // Position readback is diagnostic, not part of the servo loop.
+            // A failed poll must not disable the machine or force a full
+            // re-sync while axes are moving; back off and keep the target
+            // stream alive.
             _online = false;
             _readFailures++;
             warn_throttled(now_ms(), "position readback failed");
-            if (_readFailures >= 5) {
-                _readFailures = 0;
-                _synced       = false;  // resync (and re-enable echo) after repeated failures
-                report_driver_fault("position readback failed");
-            }
+            _nextStatusMs = now_ms() + std::max<uint32_t>(_statusPollMs * 5, 1000);
         }
     }
 
@@ -831,6 +884,72 @@ namespace MotorDrivers {
         warn_throttled(now_ms(), "feed hold: driver stop sent");
     }
 
+    void Pd42s1Motor::apply_hold_at_limit(uint32_t nowMs) {
+        // This runs in the CAN worker, after the step engine has been reset by
+        // Homing::limitReached().  Read the actual drive position and rebase
+        // the target mapping to it, so the next planner target update cannot
+        // overwrite the hold with a target that is ahead of the switch.
+        if (!_bus || !_bus->ready() || !_synced || _disabled) {
+            // The request cannot be executed in this state; do not leave a
+            // stale hold that would fire later after a recovery/resync.
+            _holdRequested = false;
+            return;
+        }
+
+        auto failHold = [&](const char* reason) {
+            warn_throttled(nowMs, reason);
+            _holdFailures++;
+            if (_holdFailures >= 3) {
+                _holdRequested = false;
+                report_driver_fault("limit hold failed");
+            } else {
+                // Retry with backoff so a failing read cannot starve the CAN
+                // worker (and the other motors) on every 1 ms pass.
+                _holdRequestMs = nowMs + 100;
+            }
+        };
+
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t  responseLen = 0;
+        size_t  len = Pd42s1Protocol::build_read_command(uint8_t(_address), Pd42s1Protocol::FUNC_READ_POSITION, request, sizeof(request));
+        int32_t position = 0;
+        if (!transact_retry(request, len, response, sizeof(response), responseLen, 100, 1) ||
+            !Pd42s1Protocol::parse_position(response, responseLen, position)) {
+            failHold("limit/hold: position read failed");
+            return;
+        }
+
+        const uint32_t holdTarget = uint32_t(position);
+        uint8_t        hold[Pd42s1Protocol::MAX_FRAME_LEN];
+        size_t holdLen = Pd42s1Protocol::build_position_command(
+            uint8_t(_address), uint8_t(_accel), uint16_t(_speedRpm), holdTarget, hold, sizeof(hold));
+        if (!holdLen) {
+            failHold("limit/hold: command build failed");
+            return;
+        }
+        // Wait for the acknowledgement.  A lost hold frame must be retried,
+        // not silently marked as delivered.
+        responseLen = 0;
+        if (!transact_retry(hold, holdLen, response, sizeof(response), responseLen, 100, 1) ||
+            !Pd42s1Protocol::parse_ack(response, responseLen)) {
+            failHold("limit/hold: command not acknowledged");
+            return;
+        }
+
+        _basePosition       = holdTarget;
+        _baseStepCount      = _stepCount;
+        _driverPosition     = position;
+        _lastTarget         = holdTarget;
+        _lastTargetChangeMs = nowMs;
+        _targetDirty        = false;
+        _finalTargetAcked   = true;
+        _holdRequested      = false;
+        _holdFailures       = 0;
+        _holdRequestMs      = 0;
+        warn_throttled(nowMs, "limit/hold: drive held at switch");
+    }
+
     void Pd42s1Motor::resume_motion() {
         if (_blockTargets && _blockTargetValid) {
             _targetDirty = true;
@@ -838,16 +957,24 @@ namespace MotorDrivers {
         }
     }
 
+    void Pd42s1Motor::on_stepping_reset() {
+        // PD42 targets are based on this motor's own _stepCount, which is not
+        // touched by Stepping::reset().  The cached base therefore needs no
+        // rebasing, and must not re-read the drive position: doing so would
+        // absorb a dual-Y skew into a fresh zero during every homing phase.
+    }
+
     void Pd42s1Motor::on_position_zeroed() {
         // The driver's encoder is now 0, but the cached base and step count
         // belong to the old coordinate system.  Force a fresh sync before
         // accepting another absolute target.
-        _synced      = false;
-        _everSynced  = false;
-        _online      = false;
-        _lastTarget       = 0;
-        _targetDirty      = true;
-        _blockTargetValid = false;
+        _synced              = false;
+        _adoptPositionOnSync = true;
+        _online              = false;
+        _lastTarget          = 0;
+        _targetDirty         = true;
+        _blockTargetValid    = false;
+        _holdRequested       = false;
     }
 
     void Pd42s1Motor::on_diagnostic_complete() {
@@ -987,6 +1114,38 @@ namespace MotorDrivers {
             }
         }
 
+        if (_syncGroup != 0) {
+            if (!sync_group_ready()) {
+                // Never let one half of a mechanically coupled group move
+                // while the other half is unsynced or disabled.  Do not turn
+                // a transient enable/disable transaction into a fault: only
+                // report when the group stays not-ready for a sustained
+                // interval during motion.
+                if (motion_state_active()) {
+                    if (_groupNotReadySinceMs == 0) {
+                        _groupNotReadySinceMs = nowMs;
+                    } else if (!_groupFaulted && int32_t(nowMs - _groupNotReadySinceMs) > 200) {
+                        _groupFaulted = true;
+                        report_driver_fault("sync group member not ready");
+                    }
+                } else {
+                    // Do not carry a stale timestamp across an idle interval;
+                    // a later motion transient must be timed from zero.
+                    _groupNotReadySinceMs = 0;
+                }
+                return;
+            }
+            _groupNotReadySinceMs = 0;
+            _groupFaulted         = false;
+        }
+
+        if (_holdRequested) {
+            if (int32_t(nowMs - _holdRequestMs) >= 0) {
+                apply_hold_at_limit(nowMs);
+            }
+            return;
+        }
+
         if (!_disabled) {
             if (_blockTargets) {
                 if (_targetDirty && _blockTargetValid) {
@@ -1035,7 +1194,7 @@ namespace MotorDrivers {
             // own target here; the leader sends it in the same batch.
         }
 
-        if (_statusPollMs && !_bus->diagnostic_active() && int32_t(nowMs - _nextStatusMs) >= 0) {
+        if (_statusPollMs && !_bus->diagnostic_active() && !motion_state_active() && int32_t(nowMs - _nextStatusMs) >= 0) {
             _nextStatusMs = nowMs + _statusPollMs;
             poll_position();
         }

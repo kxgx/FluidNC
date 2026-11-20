@@ -226,17 +226,32 @@ void Stepping::notifyStepCoordinateChanged() {
         for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
             auto* m = a->_motors[motor];
             if (m && m->_driver) {
-                m->_driver->on_stepping_reset();
+                m->_driver->on_step_coordinate_changed();
             }
         }
     }
 }
 
 void Stepping::reset() {
+    // Notify absolute-position drivers before clearing the counters.  They can
+    // then rebase their cached step origin and keep the same absolute target;
+    // this reset is not a machine-coordinate change and must not force a
+    // position re-sync in the middle of a homing phase.
+    for (axis_t axis = X_AXIS; axis < MAX_N_AXIS; ++axis) {
+        auto* a = Axes::_axis[axis];
+        if (!a) {
+            continue;
+        }
+        for (motor_t motor = 0; motor < Axis::MAX_MOTORS_PER_AXIS; ++motor) {
+            auto* m = a->_motors[motor];
+            if (m && m->_driver) {
+                m->_driver->on_stepping_reset();
+            }
+        }
+    }
     for (axis_t axis = X_AXIS; axis < MAX_N_AXIS; ++axis) {
         axis_steps[axis] = 0;
     }
-    notifyStepCoordinateChanged();
 }
 void Stepping::beginLowLatency() {}
 void Stepping::endLowLatency() {}
