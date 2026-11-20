@@ -161,8 +161,22 @@ namespace MotorDrivers {
 
         _bus = config ? config->_can : nullptr;
         Assert(_bus != nullptr, "pd42s1 motor driver requires a can: section");
-        Assert(_bus->ready(), "CAN bus is not ready");
-        Assert(_bus->control_ready(), "CAN auto-config did not complete; motion disabled");
+        if (!_bus->ready() || !_bus->control_ready()) {
+            // Do not abort the whole machine setup when the CAN subsystem is
+            // not ready (missing driver, auto-config failure, bus install
+            // failure).  Keep the axis registered but offline so the WebUI and
+            // diagnostics can still start; can_poll() stays silent until the
+            // bus becomes ready and control_ready is set by a successful
+            // auto-config.
+            can_log_error("CAN: " << name() << " axis is offline; CAN bus/control is not ready");
+            _online   = false;
+            _synced   = false;
+            _disabled = true;
+            // An offline axis must not let the machine look Idle-ready and
+            // accept G-code that cannot be executed.  Enter HardStop; the
+            // operator can recover the bus and reset explicitly.
+            send_alarm(ExecAlarm::HardStop);
+        }
 
         _bus->add_client(this);
         Stepping::assignMotorDriver(axis_index(), dual_axis_index(), this);
@@ -937,7 +951,7 @@ namespace MotorDrivers {
     }
 
     void Pd42s1Motor::can_poll(uint32_t nowMs) {
-        if (!_bus || !_bus->ready()) {
+        if (!_bus || !_bus->ready() || !_bus->control_ready()) {
             return;
         }
         if (_bus->stop_latched()) {

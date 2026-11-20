@@ -663,6 +663,12 @@ static void protocol_run_startup_lines() {
 }
 
 static void protocol_do_start_homing() {
+#if MAX_N_CAN
+    if (config && config->_can && Machine::CanBus::driver_configured() && !config->_can->motion_ready()) {
+        log_error("CAN: motion is not ready (driver init/auto-config/stop latch); homing button ignored");
+        return;
+    }
+#endif
     Machine::Homing::run_cycles(Machine::Homing::AllCycles);
 }
 

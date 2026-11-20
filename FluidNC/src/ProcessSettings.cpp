@@ -444,6 +444,45 @@ static Error cmd_log_verbose(const char* value, AuthenticationLevel auth_level, 
     }
     return Error::Ok;
 }
+#if MAX_N_CAN
+static bool can_motion_ready() {
+    if (!config || !config->_can || !Machine::CanBus::driver_configured()) {
+        return true;
+    }
+    return config->_can->motion_ready();
+}
+#else
+static bool can_motion_ready() {
+    return true;
+}
+#endif
+
+// CAN maintenance M-codes (for example the documented restart/recovery code)
+// must remain usable after $CANStop latches the bus.  They are not motion.
+static bool is_can_maintenance_line(const char* line) {
+    if (!line) {
+        return false;
+    }
+    while (isspace(*line)) {
+        ++line;
+    }
+    if (*line != 'M' && *line != 'm') {
+        return false;
+    }
+    ++line;
+    if (!isdigit(*line)) {
+        return false;
+    }
+    int code = 0;
+    while (isdigit(*line)) {
+        code = code * 10 + (*line++ - '0');
+        if (code > 1000) {
+            return false;
+        }
+    }
+    return code >= 150 && code <= 161;
+}
+
 static Error home(AxisMask axisMask, Channel& out) {
     // see if blocking control switches are active
     if (config->_control->pins_block_unlock()) {
@@ -472,6 +511,11 @@ static Error home(AxisMask axisMask, Channel& out) {
 
     if (config->_control->safety_door_ajar()) {
         return Error::CheckDoor;  // Block if safety door is ajar.
+    }
+
+    if (!can_motion_ready()) {
+        log_error("CAN: motion is not ready (driver init/auto-config/stop latch); homing refused");
+        return Error::SystemGcLock;
     }
 
     Machine::Homing::run_cycles(axisMask);
@@ -628,6 +672,10 @@ static Error showState(const char* value, AuthenticationLevel auth_level, Channe
 static Error doJog(const char* value, AuthenticationLevel auth_level, Channel& out) {
     if (state_is(State::ConfigAlarm)) {
         return Error::ConfigurationInvalid;
+    }
+    if (!can_motion_ready()) {
+        log_error("CAN: motion is not ready (driver init/auto-config/stop latch); jog refused");
+        return Error::SystemGcLock;
     }
 
     // For jogging, you must give gc_execute_line() a line that
@@ -2012,6 +2060,10 @@ Error execute_line(const char* line, Channel& channel, AuthenticationLevel auth_
     }
     // Everything else is gcode. Block if in an alarm state or jog mode.
     if (state_is(State::Alarm) || state_is(State::Critical) || state_is(State::ConfigAlarm) || state_is(State::Jog)) {
+        return Error::SystemGcLock;
+    }
+    if (!can_motion_ready() && !is_can_maintenance_line(line)) {
+        log_error_to(channel, "CAN: motion is not ready (driver init/auto-config/stop latch); G-code refused");
         return Error::SystemGcLock;
     }
     Error result = gc_execute_line(line, channel);

@@ -133,6 +133,15 @@ namespace Machine {
         // Generic bus control state.
         bool control_ready() const { return _control_ready; }
         void set_control_ready(bool ready) { _control_ready = ready; }
+
+        // Machine-level motion gate.  CAN axes must not accept G-code, jog or
+        // homing while the worker is absent, driver init/auto-config failed,
+        // a stop is latched, or control has been inhibited.  Diagnostics are
+        // deliberately not gated by this.
+        bool motion_ready() const {
+            return _control_ready && _task_handle != nullptr && !_stop_latched.load(std::memory_order_acquire) && !_inhibited;
+        }
+
         bool stop_latched() const { return _stop_latched.load(std::memory_order_acquire); }
         void latch_stop() { _stop_latched.store(true, std::memory_order_release); }
         void clear_stop_latch() { _stop_latched.store(false, std::memory_order_release); }

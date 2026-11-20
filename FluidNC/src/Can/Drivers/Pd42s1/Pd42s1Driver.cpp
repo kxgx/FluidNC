@@ -489,6 +489,7 @@ namespace Machine {
             return false;
         }
         const uint32_t configuredBaud = _bus->baud();
+        const bool     stopWasLatched = _bus->stop_latched();
         can_log_info("CAN: starting manual auto-config (target " << configuredBaud << " baud)");
         if (!_bus->suspend()) {
             return false;
@@ -499,18 +500,38 @@ namespace Machine {
             can_log_error("CAN: auto-config failed");
             _bus->set_control_ready(false);
             _bus->install_transport(configuredBaud);  // serial diagnostics may still use the installed bus
-            return false;
-        }
-        if (!_bus->resume()) {
+            // The drivers may still be enabled from before the failed
+            // reconfiguration.  The worker is stopped, so the normal
+            // apply_disable() path cannot reach them; perform a direct,
+            // readback-verified stop now.
+            _bus->invalidate_all_client_positions();
+            if (!stop_all_drivers()) {
+                can_log_error("CAN: failed auto-config left at least one driver enabled");
+            }
+            // stop_all_drivers() latches the stop to protect the restart path.
+            // A failed auto-config never reaches that restart path; leaving the
+            // latch set would make a later successful retry report "OK" while
+            // the worker silently refuses all motion.  Preserve a latch that
+            // the operator had already set with $CANStop.
+            if (!stopWasLatched) {
+                _bus->clear_stop_latch();
+            }
             return false;
         }
         // Do not clear a latched $CANStop here; only $CANReset may release it.
         // Runtime reconfiguration closes command echo and may have reset the
         // driver parameter state.  Force every client through a fresh sync so
-        // it cannot keep using an old position base.
+        // it cannot keep using an old position base.  This must happen before
+        // the worker is started again.
         _bus->invalidate_all_client_positions();
-        if (_bus->ready()) {
-            _bus->set_control_ready(true);
+        // Allow the recovery worker to start, then resume the transport.
+        // start_worker() intentionally refuses to start when control_ready is
+        // false; setting it first is what makes a successful manual
+        // $CANAutoConfig able to recover from a previous failure.
+        _bus->set_control_ready(true);
+        if (!_bus->resume()) {
+            _bus->set_control_ready(false);
+            return false;
         }
         log_info("CAN auto-config finished OK");
         can_log_info("CAN: auto-config finished");
@@ -660,7 +681,6 @@ namespace Machine {
 
         static const uint32_t bauds[]    = { 125000, 250000, 500000, 1000000 };
         const uint32_t        configured = _bus->baud();
-        const bool            echoBefore = _echo_state;
         int                   total      = 0;
 
         // Stop the worker and release the bus; no client transaction may run
@@ -703,13 +723,16 @@ namespace Machine {
         }
         {
             CanBus::Lock lock(*_bus);
-            if (echoBefore) {
-                enable_all_driver_echo_locked();
-            } else {
-                disable_all_driver_echo_locked();
-            }
+            // Normal motor control requires command echo to be enabled.  The
+            // old code restored the cached pre-scan state, but the motors open
+            // echo by themselves during sync; that cache is stale and could
+            // silence every driver after a scan.  Always restore the normal
+            // control state and force a fresh client sync.
+            enable_all_driver_echo_locked();
+            _echo_state = true;
         }
-        log_info("CAN scan: restored " << _bus->baud() << " baud and command echo " << (echoBefore ? "enabled" : "disabled"));
+        _bus->invalidate_all_client_positions();
+        log_info("CAN scan: restored " << _bus->baud() << " baud and command echo enabled");
         return total;
     }
 
