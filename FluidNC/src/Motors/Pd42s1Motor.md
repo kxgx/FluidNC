@@ -38,8 +38,8 @@ its UART port:
 * slave address (command `0x60`): 1, 2, 3, ... one different value per motor
 * CAN bit rate (command `0x68`): must match `can: baud`; the PD42S1 supports
   125000, 250000, 500000 and 1000000
-* optionally the response CAN ID (command `0x6C`); the common command ID is
-  0x1000, which is the default and what `can: command_id` expects
+* optionally the response CAN ID (command `0x6C`); the driver uses the fixed
+  extended command ID `0x1000` (`Pd42s1Protocol::CAN_COMMAND_ID`)
 * save the parameters (command `0x04`)
 
 ## Configuration
@@ -188,7 +188,7 @@ position within about 0.01 mm.
    **500 kbps**, so either set the drivers to 1000 or set `can: baud` to
    500000 -- a mismatch produces no acknowledgement on the bus.
 3. The controller transmits on extended ID `0x1000`; the PD42S1 accepts IDs in
-   `0x1000..0x100F` only.  `can: command_id` is validated against that range.
+   `0x1000..0x100F` only.  The command ID is a driver constant, not a config field.
 4. Leave command echo (`0x6F`) at 0 (acknowledge).  With `0x6F = 1` the driver
    stops replying.  At boot the firmware enables echo, verifies every
    configured driver and then closes echo again; normal motor sync re-enables
@@ -347,4 +347,3 @@ not as a harmless diagnostic failure:
   broadcast can still be recovered;
 - `$CANReset` can be used from Idle to reboot the drivers and resynchronise
   them; it is not sent during motion.
-

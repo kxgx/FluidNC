@@ -170,6 +170,8 @@ namespace MotorDrivers {
     private:
         bool sync();
         bool resync_position_base();
+        void enable_echo();
+        void ensure_echo();
         bool transact(
             const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
         bool transact_retry(
@@ -269,5 +271,3 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
-
-

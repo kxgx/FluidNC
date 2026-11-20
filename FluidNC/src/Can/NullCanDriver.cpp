@@ -16,6 +16,7 @@ namespace Machine {
         class NullCanDriver final : public CanDriver {
         public:
             const char* driver_name() const override { return "null_can"; }
+            CanProtocolClass protocol_class() const override { return CanProtocolClass::Private; }
             bool        uses_transport() const override { return false; }
 
             int scan() override {

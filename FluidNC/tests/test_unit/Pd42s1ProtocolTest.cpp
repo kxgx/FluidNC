@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "Motors/Pd42s1Protocol.h"
+#include "Can/Protocols/Private/Pd42s1/Pd42s1Protocol.h"
 
 #include <array>
 #include <cstdint>

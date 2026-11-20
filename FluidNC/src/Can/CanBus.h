@@ -5,13 +5,18 @@
     Machine::CanBus -- a CAN (TWAI) bus for motor drivers that are commanded
     over CAN instead of by step/direction pulses.
 
-    The bus owns the ESP32 TWAI controller and a small worker task.  Motor
-    drivers register as CanBusClient objects; the worker calls their poll()
-    method periodically, and that method runs the blocking request/response
-    transactions.  Keeping all bus traffic in one task is what makes the
-    protocol work: the PD42S1 protocol has no request IDs, so a response can
-    only be matched to its request if no two transactions overlap.  A
-    transaction holds CanBus::Lock for its whole duration.
+    This class is a transport only.  It owns the ESP32 TWAI controller, a small
+    worker task, the client list and the generic bus state.  Everything that is
+    specific to a motor protocol -- framing, command echo handling, bit-rate
+    negotiation, scanning, diagnostics and the maintenance commands -- lives in
+    a CanDriver implementation selected with can.driver.
+
+    Motor drivers register as CanBusClient objects; the worker calls their
+    poll() method periodically, and that method runs the blocking
+    request/response transactions.  Keeping all bus traffic in one task is what
+    makes many vendor protocols work: without request IDs a response can only
+    be matched to its request if no two transactions overlap.  A transaction
+    holds CanBus::Lock for its whole duration.
 */
 
 #pragma once
@@ -42,7 +47,7 @@ namespace Machine {
         virtual void can_poll(uint32_t now_ms) = 0;
 
         // Slave address used to detect duplicate configured addresses; 0 for
-        // clients that do not use a PD42S1-style address.
+        // clients that do not use an address-based protocol.
         virtual uint8_t bus_address() const { return 0; }
 
         // True once the client has rebuilt its cached position after a zero
@@ -62,50 +67,57 @@ namespace Machine {
         virtual ~CanBusClient() = default;
     };
 
-    class CanBus : public Configuration::Configurable, public CanDriver {
+    // Generic TWAI transport.  It does not know any vendor protocol; the
+    // selected CanDriver uses the public transport API below.
+    class CanBus : public Configuration::Configurable {
     public:
         CanBus() = default;
 
         static constexpr size_t MAX_CLIENTS = 16;
 
-        // Command-layer view.  Future CAN drivers implement CanDriver and can
-        // be selected without changing GCode.cpp/ProcessSettings.cpp.
-        CanDriver*  driver();
-        const char* driver_name() const override {
-            return (_driver && _driver != this) ? _driver->driver_name() : _driverName.c_str();
-        }
+        // Bus status as seen by a vendor driver's diagnostic commands.
+        struct BusStatus {
+            const char* state;
+            uint32_t    tx_error;
+            uint32_t    rx_error;
+            uint32_t    bus_errors;
+            uint32_t    msgs_to_tx;
+            uint32_t    msgs_to_rx;
+            uint32_t    bus_off_count;
+        };
 
-        // PD42S1 manual section 4.1 item 7: two complete instructions must be
-        // at least this far apart so the driver can finish parsing the first
-        // one.  The frames that make up a single instruction are still sent
-        // back-to-back.
-        static constexpr uint32_t MIN_INSTRUCTION_GAP_MS = 2;
-
-        // Installs the TWAI driver and starts the worker task.  Safe to call
-        // when no pins are configured; it logs and does nothing in that case.
+        // Installs the TWAI driver, starts the worker task and then lets the
+        // selected CanDriver perform its own probe/initialisation sequence.
+        // Safe to call when no pins are configured; it logs and does nothing in
+        // that case.
         void init();
 
         void validate() override;
         void group(Configuration::HandlerBase& handler) override;
 
-        bool configured() const { return _tx.defined() && _rx.defined(); }
-        bool ready() const { return _ready; }
+        // Selected protocol driver (created through CanDriverRegistry).  The
+        // command layer assumes this is never null after configuration
+        // validation; on a bad can.driver value it falls back to a stub driver
+        // so a diagnostic command cannot crash the firmware.
+        CanDriver*  driver();
+        const char* driver_name() const;
 
-        // A foreground diagnostic read is in progress.  The CAN worker should
-        // avoid starting a new background status poll so the foreground
-        // command does not wait for a poll transaction.
-        bool diagnostic_active() const { return _diagnostic_active.load(std::memory_order_acquire); }
+        bool     configured() const { return _tx.defined() && _rx.defined(); }
+        bool     ready() const { return _ready; }
+        uint32_t baud() const { return _baud; }
+        const Pin& tx_pin() const { return _tx; }
+        const Pin& rx_pin() const { return _rx; }
 
-        // True when at least one PD42S1 CAN motor driver was configured.  The
-        // bus, worker and all $CAN.../M15x commands are gated on this so a
-        // machine without a pd42s1 motor never starts the CAN subsystem.
+        // True when at least one CAN motor driver was configured.  The bus,
+        // worker and all $CAN.../M15x commands are gated on this so a machine
+        // without a CAN motor never starts the CAN subsystem.
         static void mark_driver_configured();
         static void unmark_driver_configured();
         static bool driver_configured();
         static int  configured_driver_count();
 
         // Addresses registered from the parsed motor configurations before the
-        // bus starts.  Auto-config must use these rather than _clients because
+        // bus starts.  Drivers use these rather than the client list because
         // CanBus::init() runs before Axes::init() adds the clients.
         static void   register_configured_address(uint8_t address);
         static void   unregister_configured_address(uint8_t address);
@@ -117,11 +129,37 @@ namespace Machine {
         static bool logging_enabled();
         static void set_logging_enabled(bool enabled);
         static bool toggle_logging();
-        bool        enabled() const { return _driver_configured; }
 
-        uint32_t command_id() const { return _command_id; }
+        // Generic bus control state.
+        bool control_ready() const { return _control_ready; }
+        void set_control_ready(bool ready) { _control_ready = ready; }
+        bool stop_latched() const { return _stop_latched.load(std::memory_order_acquire); }
+        void latch_stop() { _stop_latched.store(true, std::memory_order_release); }
+        void clear_stop_latch() { _stop_latched.store(false, std::memory_order_release); }
 
+        // Stops all CAN motion control (worker stops polling clients) and
+        // warns.  Used when the configuration contains duplicate slave
+        // addresses; diagnostics remain available.
+        void        inhibit_control(const char* reason);
+        bool        inhibited() const { return _inhibited; }
+        const char* inhibit_reason() const { return _inhibit_reason; }
+
+        // A foreground diagnostic read is in progress.  The CAN worker should
+        // avoid starting a new background status poll so the foreground
+        // command does not wait for a poll transaction.
+        bool diagnostic_active() const { return _diagnostic_active.load(std::memory_order_acquire); }
+        void begin_diagnostic() { _diagnostic_active.store(true, std::memory_order_release); }
+        void end_diagnostic();
+
+        // Waits until the worker is not inside a client poll.  A driver uses
+        // this before a latched safe stop so an in-flight poll cannot re-enable
+        // a motor after the stop.
+        void wait_for_worker_idle();
+
+        // Client list operations.
         void add_client(CanBusClient* client);
+        bool has_client(uint8_t address) const;
+        bool client_synced(uint8_t address) const;
 
         // Unique slave addresses of configured clients, in client order.
         size_t client_addresses(uint8_t* out, size_t max) const;
@@ -130,18 +168,40 @@ namespace Machine {
         // normal streaming path.  Ask the owning client to discard its cached
         // position base before it sends another absolute target.
         void invalidate_client_position(uint8_t address);
+        void invalidate_all_client_positions();
 
-        // Splits one logical protocol message into 8-byte CAN data frames and
-        // transmits them back-to-back.  Returns false if any frame could not
-        // be queued for transmission.  Waits for MIN_INSTRUCTION_GAP_MS since
-        // the end of the previous message before it transmits the first frame.
-        // Callers must hold the Lock so that the pace is tracked consistently.
-        bool send_message(const uint8_t* data, size_t len, uint32_t timeout_ms);
+        // Sends one raw CAN data frame with an explicit identifier and frame
+        // format: extended=false selects an 11-bit standard identifier,
+        // extended=true a 29-bit extended one.  This is the primitive the
+        // logical-message helpers below -- and standard protocols such as
+        // CANopen/CiA301, which use 11-bit frames -- are built on.  It sends
+        // exactly one frame, so len may not exceed 8 bytes.  It does not apply
+        // the inter-message gap; use send_message()/send_chunked() when a
+        // vendor protocol requires pacing between complete messages.
+        bool send_frame(uint32_t id, bool extended, const uint8_t* data, size_t len, uint32_t timeout_ms);
 
-        // Like send_message(), but for protocols whose extended frame ID is
-        // (address << 8) | packet.  data starts at the function code and
-        // includes the protocol checksum; base_id is (address << 8).
+        // Sends one logical protocol message in 8-byte CAN data frames.  The
+        // caller supplies the 29-bit extended identifier; the frames are
+        // transmitted back-to-back.  Returns false if any frame could not be
+        // queued for transmission.  Waits for the configured inter-message gap
+        // since the end of the previous message before it transmits the first
+        // frame.  Callers must hold the Lock so that the pace is tracked
+        // consistently.
+        bool send_message(uint32_t can_id, const uint8_t* data, size_t len, uint32_t timeout_ms);
+
+        // Like send_message(), but the identifier of each frame is
+        // (base_id | packet_number).  data starts after the protocol-specific
+        // address/header byte.  For protocols whose extended frame ID is
+        // (address << 8) | packet.
         bool send_chunked(uint32_t base_id, const uint8_t* data, size_t len, uint32_t timeout_ms);
+
+        // Waits for the next CAN data frame, copies its payload into buf and
+        // reports the identifier and frame format (extended=false is an 11-bit
+        // standard frame).  Returns the payload length, or 0 when no frame
+        // arrived in time.  RTR frames are discarded.  A protocol that shares
+        // the bus with other nodes uses this to match a response against its
+        // own expected COB-ID.
+        size_t receive_frame(uint32_t& id, bool& extended, uint8_t* buf, size_t max_len, uint32_t timeout_ms);
 
         // Waits for the next CAN data frame and copies its payload into buf.
         // Returns the payload length, or 0 when no frame arrived in time.
@@ -155,126 +215,33 @@ namespace Machine {
         void flush_receive();
         void flush_transmit();
 
-        // Sends the PD42S1 "read version" command to addresses 1..8 and logs
-        // every device that answers.  Returns the number of responders.
-        // Holds the transaction lock for the whole scan, so the motor worker
-        // cannot interleave its own requests.
-        int scan();
+        // TWAI error/state information for vendor diagnostic commands.
+        bool        bus_status(BusStatus& out) const;
+        uint32_t    tx_error_counter() const;
+        uint32_t    bus_off_count() const { return _bus_off_count; }
 
-        // Tries the same scan at every PD42S1 bit rate (125k, 250k, 500k and
-        // 1M), then restores the configured bit rate and restarts the worker.
-        // Useful when the drivers' CAN bit rate is not known.
-        int scan_all_bauds();
+        // Minimum gap between two logical messages.  A driver whose protocol
+        // requires a pause between complete instructions sets this in
+        // init_driver().  Zero disables the extra delay.
+        void     set_min_message_gap_ms(uint32_t gap) { _min_message_gap_ms = gap; }
+        uint32_t min_message_gap_ms() const { return _min_message_gap_ms; }
 
-        // Broadcasts the PD42S1 "command echo" setting (0x6F) to all drivers:
-        // true = enable replies, false = disable replies.  Takes the
-        // transaction lock internally; do not call it while already holding a
-        // Lock.  Broadcast commands are executed but never answered.
-        void set_driver_echo(bool enable);
-
-        // Sends the same 0x6F = 0 command to one specific driver.  This is
-        // more reliable than a broadcast when several drivers share the bus:
-        // a driver that missed one broadcast would otherwise stay silent for
-        // every later transaction.  Takes the lock internally.
-        void enable_driver_echo(uint8_t address);
-
-        // Sends 0x6F = 0 to every possible address (1..8).  Needed only when
-        // a driver was left with command echo disabled by an earlier tool;
-        // normal operation and scans leave 0x6F at its factory default.
-        void enable_all_driver_echo();
-
-        // Logs the TWAI state, error counters and restart count of the bus.
-        // Diagnostic only; takes the transaction lock internally.
-        void report_status();
-
-        // Sends 0xFB (clear stall / brake / disabled state) to all drivers:
-        // broadcast first, then every address 1..8.  Does not enable the
-        // motors; the normal motor sync will re-enable them when needed.
-        void clear_driver_faults();
-
-        // Broadcasts the PD42S1 reset command (0x02) to recover a driver that
-        // stopped answering, waits for it to boot, then re-enables echo.
-        void restart_drivers();
-
-        // Reads and displays each PD42S1's run status (0x2C), stall flag
-        // (0x2D), enable state (0x2F) and in-position flag (0x30), marking
-        // abnormal conditions (overload/stall/undervoltage).
-        void report_driver_faults();
-
-        // Reads and displays position (0x2A), position error (0x2B), speed
-        // (0x29) and in-position flag (0x30) from every answering driver.
-        void report_driver_positions();
-
-        // Reads the saved driver parameters (0x32) and displays work mode,
-        // echo setting and CAN baud for every address that answers.
-        void report_driver_configs();
-
-        // Broadcasts the immediate-brake command (0xFC) to all drivers.
-        bool stop_all_drivers();
-
-    // Read one driver's current encoder position.
-    bool read_driver_position(uint8_t address, int32_t& position);
-
-    // Send one final 0xF2 absolute target to one driver and wait for its
-    // acknowledge.  This bypasses the planner and is for diagnostics only.
-    bool send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel);
-
-    // Send 0xF8 to one driver: zero its current encoder position.
-    bool zero_driver_position(uint8_t address);
-
-    // Wait until every listed address has a client that reports is_synced().
-    // Used after $CANZero so a following motion command cannot use a stale
-    // position base.  Returns false on timeout.
-    bool wait_for_driver_sync(const uint8_t* addresses, size_t count, uint32_t timeout_ms);
-
-    // Enable or disable one driver (0xFA).  In group mode the silent members
-    // still execute the addressed command.
-    bool set_driver_enable(uint8_t address, bool enable);
-
-    // Apply the optional persistent group member from config.yaml
-    // (group_member_address -> group_member_group).  Safe to call after the
-    // bus is ready; a member already in group mode is skipped.
-    bool apply_configured_group();
-
-    // Switch one driver to group-address mode (0x61), then save the parameter
-    // (0x04) through the group address so the group member receives it
-    // silently while the responding member acknowledges.  After this call the
-    // old slave address no longer answers for that driver.
-    bool set_group_address(uint8_t address, uint8_t group);
-
-    // Read-only status for display/diagnostics.
-    uint32_t baud() const { return _baud; }
-
-        // Sends one read command and prints the raw response bytes.  Useful
-        // for exploring function codes that do not have a dedicated command.
-        void read_raw(uint8_t address, uint8_t function);
-
-        // Stops all CAN motion control (worker stops polling clients) and
-        // warns.  Used when the configuration contains duplicate PD42S1
-        // addresses; diagnostics remain available.
-        void inhibit_control(const char* reason);
-        bool inhibited() const { return _inhibited; }
-
-        // Runs the CAN baud/parameter auto-configuration on demand.
-        bool run_auto_config();
-
-        // Best-effort, throttled re-enable of command echo for normal motor
-        // control (used after auto-config leaves echo off or a driver missed
-        // it); avoids flooding the bus when several motors retry.
-        void ensure_driver_echo();
-
-        // Releases the TWAI pins so diagnostics (like the transceiver test or
-        // the pin sweep) can use them as plain GPIO, then restores the bus.
+        // Releases the TWAI pins so diagnostics (like a vendor transceiver
+        // test or the pin sweep) can use them as plain GPIO, then restores the
+        // bus.
         bool suspend();
         bool resume();
 
-        bool control_ready() const { return _control_ready; }
-        bool stop_latched() const { return _stop_latched.load(std::memory_order_acquire); }
-        void clear_stop_latch() { _stop_latched.store(false, std::memory_order_release); }
+        // Install/remove the TWAI controller.  A driver may call these from
+        // init_driver() while probing several bit rates; the worker must be
+        // suspended first (suspend() does that).
+        bool install_transport();
+        bool install_transport(uint32_t baud);
+        void uninstall_transport();
 
-        // Serializes transactions.  The protocol has no request IDs, so a
-        // transaction must hold this from its first transmitted frame until
-        // its last received response frame has been assembled.
+        // Serializes transactions.  Vendor protocols often have no request
+        // IDs, so a transaction must hold this from its first transmitted
+        // frame until its last received response frame has been assembled.
         class Lock {
         public:
             explicit Lock(CanBus& bus) : _bus(bus) { _bus.take(); }
@@ -289,45 +256,27 @@ namespace Machine {
         ~CanBus();
 
     private:
-        bool        driver_ok(const char* operation);
-        void        take();
-        void        release();
-        void        check_state();
-        bool        install_driver();
-        void        start_worker();
-        bool        test_transceiver();
-        void        enable_echoes_at_startup();
-        bool        auto_configure_drivers();
-        bool        switch_driver_baud_retry(uint8_t address, uint32_t oldBaud, uint32_t newBaud);
-        bool        probe_address_quiet(uint8_t address, uint8_t& firmware, uint8_t& hardware, uint32_t timeout_ms, int attempts);
-        bool        read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode);
-        bool        has_client(uint8_t address) const;
-        void        notify_diagnostic_complete();
-        void        set_echo_to_address_locked(uint8_t address, bool enable);
-        void        disable_all_driver_echo_locked();
-        bool        send_echo_state(bool enable);          // caller must hold the Lock
-        bool        send_echo_state_forced(bool enable);   // caller must hold the Lock
-        bool        enable_driver_echo_locked(uint8_t address);  // caller must hold the Lock
-        void        enable_all_driver_echo_locked();             // caller must hold the Lock
-        int         scan_addresses();
-        int         scan_address(uint8_t address, uint32_t timeout_ms);
-        bool        transact(
-            const uint8_t* request, size_t requestLen, uint8_t* response, size_t responseCapacity, size_t& responseLen, uint32_t timeoutMs);
-        void        worker();
+        void take();
+        void release();
+        void check_state();
+        void start_worker();
+        bool stop_worker();
+        void notify_diagnostic_complete();
+        void worker();
         static void worker_entry(void* arg);
-        bool        stop_worker();
 
-        std::string _driverName = "pd42s1";
-        CanDriver*  _driver           = nullptr;
-        bool        _ownsDriver       = false;
+        const char* effective_driver_name() const;
+
+        // Configured by can: (empty driver name selects the registry default).
+        std::string _driverName;
+        CanDriver*  _driver = nullptr;
+        // Name the cached _driver was created for, so a configuration reload
+        // with a different driver recreates it.
         std::string _resolvedDriverName;
 
         Pin      _tx;
         Pin      _rx;
-        uint32_t _baud       = 500000;
-        uint32_t _command_id = 0x1000;
-        uint8_t  _groupMemberAddress = 0;
-        uint8_t  _groupMemberGroup   = 0;
+        uint32_t _baud = 500000;
 
         static bool    _driver_configured;
         static int     _driver_count;
@@ -335,9 +284,10 @@ namespace Machine {
         static uint8_t _configuredAddresses[MAX_CLIENTS];
         static size_t  _configuredAddressCount;
 
-        bool              _ready          = false;
-        bool              _control_ready  = false;
-        bool              _auto_config_ok = false;
+        bool              _ready         = false;
+        bool              _control_ready = false;
+        bool              _inhibited     = false;
+        const char*       _inhibit_reason = nullptr;
         std::atomic<bool> _stop_latched{ false };
         std::atomic<bool> _diagnostic_active{ false };
         std::atomic<bool> _worker_busy{ false };
@@ -347,33 +297,25 @@ namespace Machine {
         volatile bool     _stop_requested = false;
         volatile bool     _task_exited    = false;
 
-        uint32_t      _last_state_check_ms  = 0;
-        uint32_t      _last_state_log_ms    = 0;
-        uint32_t      _bus_off_count        = 0;
+        uint32_t      _last_state_check_ms = 0;
+        uint32_t      _last_state_log_ms   = 0;
+        uint32_t      _bus_off_count       = 0;
         CanBusClient* _clients[MAX_CLIENTS] = { nullptr };
         size_t        _n_clients            = 0;
 
-        // Last echo state we configured on the drivers; avoids re-sending the
-        // broadcast (and flooding the log) when several motors re-sync.
-        bool _echo_state = false;
-
-        // Set when duplicate PD42S1 addresses make control unsafe.
-        bool        _inhibited       = false;
-        const char* _inhibit_reason  = nullptr;
-        uint32_t    _last_all_echo_ms = 0;
-
-        // Pacing between logical instructions.  _message_sent distinguishes
-        // "no message yet" (so the first message after boot is not delayed)
-        // from a timestamp that happens to be zero.
+        // Pacing between logical messages.  _message_sent distinguishes "no
+        // message yet" (so the first message after boot is not delayed) from a
+        // timestamp that happens to be zero.
         uint32_t _last_message_end_ms = 0;
         bool     _message_sent        = false;
+        uint32_t _min_message_gap_ms  = 0;
     };
 }
 
 // Gate the asynchronous/boot/worker CAN messages behind $CANLog.  Explicit
 // $CANStatus/$CANScan/... report commands use log_* directly so they still
 // print when background logging is off.
-#define can_log_info(...)  do { if (Machine::CanBus::logging_enabled()) { log_info(__VA_ARGS__); } } while (0)
+#define can_log_info(...)    do { if (Machine::CanBus::logging_enabled()) { log_info(__VA_ARGS__); } } while (0)
 #define can_log_verbose(...) do { if (Machine::CanBus::logging_enabled()) { log_verbose(__VA_ARGS__); } } while (0)
 // Errors and warnings are safety/diagnostic information and must never be
 // hidden by the verbose CAN logging switch.

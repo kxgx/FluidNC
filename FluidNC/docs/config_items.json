@@ -372,8 +372,8 @@
  "can": {
   "driver": {
    "type": "string",
-   "default": "\"pd42s1\"",
-   "description": "CAN motor protocol.  The command layer talks to this selection only through CanDriver; adding a vendor means adding a CanDriver implementation rather than editing GCode/ProcessSettings.\n"
+   "default": "\"\" (the default driver registered by the firmware)",
+   "description": "CAN motor protocol.  Every vendor protocol is a CanDriver implementation registered in CanDriverRegistry, so adding a vendor does not require changes in GCode.cpp or ProcessSettings.cpp.\n"
   },
   "tx_pin": {
    "type": "pin",
@@ -391,29 +391,7 @@
    "type": "integer",
    "default": "500000",
    "tuning": "per-machine",
-   "description": "CAN bit rate in bits per second.  Must match the bit rate configured in the motor drivers.  The PD42S1 driver supports 125000, 250000, 500000 and 1000000; this bus supports the same four values.\n"
-  },
-  "command_id": {
-   "type": "integer",
-   "default": "0x1000",
-   "tuning": "per-machine",
-   "description": "29-bit extended CAN ID used for frames sent by the controller.  The vendor's CAN examples use 0x1000, which is the PD42S1 default.  The driver only accepts IDs in 0x1000..0x100F; validate() enforces that. Only change this if the drivers were reprogrammed with command ID 0x6C.\n"
-  },
-  "group_member_address": {
-   "type": "integer",
-   "min": 0,
-   "max": 255,
-   "default": "0",
-   "tuning": "per-machine",
-   "description": "Optional slave address of a driver that should be switched to group-address mode at boot.  0 disables the feature.\n"
-  },
-  "group_member_group": {
-   "type": "integer",
-   "min": 0,
-   "max": 255,
-   "default": "0",
-   "tuning": "per-machine",
-   "description": "Group address for group_member_address.  Both fields must be non-zero and different to enable the feature.\n"
+   "description": "CAN bit rate in bits per second.  Must match the bit rate configured in the motor drivers.  This transport supports 125000, 250000, 500000 and 1000000.\n"
   }
  },
  "i2cN": {
@@ -2351,6 +2329,132 @@
    "default": "20",
    "tuning": "typical",
    "description": "Interval between streamed relative-position commands.\n"
+  }
+ },
+ "axes.<letter>.motorN.canopen": {
+  "address": {
+   "type": "integer",
+   "min": 1,
+   "max": 16,
+   "default": "1",
+   "tuning": "per-machine",
+   "description": "CANopen node id of this drive.  CiA301 calls this node_id; it must be unique on the bus and must match the id configured in the drive.  This firmware's shared CAN address bookkeeping limits the value to 1..16 even though CiA301 allows 1..127.  Address 0 is the NMT broadcast id and is not valid here.\n"
+  },
+  "node_id": {
+   "type": "integer",
+   "min": 0,
+   "max": 16,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "Optional alias for address.  0 uses address; any other value must equal address.  Vendor manuals that call the setting node_id can use this key instead of address.\n"
+  },
+  "counts_per_step": {
+   "type": "float",
+   "min": 1e-06,
+   "max": 1000000.0,
+   "default": "1.0",
+   "tuning": "per-machine",
+   "description": "Drive position units (CiA402 position increments, usually encoder counts) per FluidNC step.  Set it to 1.0 when steps_per_mm has already been chosen in these units.\n"
+  },
+  "counts_per_rev": {
+   "type": "integer",
+   "min": 1,
+   "max": 1000000,
+   "default": "10000",
+   "tuning": "per-machine",
+   "description": "Drive position increments per motor revolution.  Used to convert speed_rpm to the CiA402 profile velocity object and to size the idle following-error window.  Check this against the drive's encoder/multi-turn setting; the X42S/X28S manuals do not state a CANopen default.\n"
+  },
+  "invert_direction": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "typical",
+   "description": "Reverses the direction in which the motor follows the step stream, without swapping motor phases.\n"
+  },
+  "update_ms": {
+   "type": "integer",
+   "min": 2,
+   "max": 1000,
+   "default": "20",
+   "tuning": "typical",
+   "description": "Interval between streamed absolute target-position SDO writes. Smaller values follow the step stream more closely at the cost of more CAN traffic (each write is one 8-byte frame plus a response).\n"
+  },
+  "status_poll_ms": {
+   "type": "integer",
+   "min": 0,
+   "max": 60000,
+   "default": "1000",
+   "tuning": "typical",
+   "description": "Interval between actual-position (0x6064) and statusword (0x6041) readbacks, used for diagnostics and resynchronisation.  Set to 0 to disable background polling.\n"
+  },
+  "speed_rpm": {
+   "type": "integer",
+   "min": 0,
+   "max": 6000,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "Optional maximum profile speed in RPM, written to the CiA402 profile velocity object (0x6081) as counts_per_rev * rpm / 60 position units per second.  0 disables the write and leaves the drive's own profile velocity untouched.  This assumes the drive expresses profile velocity in position units/s; verify before use.\n"
+  },
+  "setpoint_toggle": {
+   "type": "boolean",
+   "default": "false",
+   "tuning": "per-machine",
+   "description": "Also toggle CiA402 controlword bit 4 (new set-point) after each target position write.  Some profile position implementations only latch 0x607A on that edge; others (cyclic synchronous position, vendor auto-latch) follow the object directly.  The manual does not say which behaviour the X42S/X28S uses, so this is opt-in rather than assumed.\n"
+  },
+  "controlword_index": {
+   "type": "integer",
+   "min": 0,
+   "max": 65535,
+   "default": "0x6040",
+   "tuning": "per-machine",
+   "description": "CiA402 controlword object index.  Override only when the drive uses a non-standard object dictionary.\n"
+  },
+  "statusword_index": {
+   "type": "integer",
+   "min": 0,
+   "max": 65535,
+   "default": "0x6041",
+   "tuning": "per-machine",
+   "description": "CiA402 statusword object index.\n"
+  },
+  "mode_index": {
+   "type": "integer",
+   "min": 0,
+   "max": 65535,
+   "default": "0x6060",
+   "tuning": "per-machine",
+   "description": "CiA402 modes-of-operation object index.  The firmware reads the mode display (mode_index + 1) for diagnostics but does not write the mode; the drive must already be configured for a position mode that accepts target-position updates.\n"
+  },
+  "target_position_index": {
+   "type": "integer",
+   "min": 0,
+   "max": 65535,
+   "default": "0x607A",
+   "tuning": "per-machine",
+   "description": "CiA402 target position object index (absolute, drive position units).\n"
+  },
+  "actual_position_index": {
+   "type": "integer",
+   "min": 0,
+   "max": 65535,
+   "default": "0x6064",
+   "tuning": "per-machine",
+   "description": "CiA402 position actual value object index (readback).\n"
+  },
+  "sdo_request_cobid": {
+   "type": "integer",
+   "min": 0,
+   "max": 2047,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "11-bit COB-ID the controller uses to send SDO requests (CiA301 default 0x600 + node id).  0 selects the standard default.\n"
+  },
+  "sdo_response_cobid": {
+   "type": "integer",
+   "min": 0,
+   "max": 2047,
+   "default": "0",
+   "tuning": "per-machine",
+   "description": "11-bit COB-ID the drive uses for SDO responses (CiA301 default 0x580 + node id).  0 selects the standard default.\n"
   }
  },
  "axes.<letter>.motorN.unipolar": {

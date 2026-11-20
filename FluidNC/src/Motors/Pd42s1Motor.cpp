@@ -8,7 +8,7 @@
 #    include "Pd42s1Motor.h"
 
 #    include "Machine/MachineConfig.h"
-#    include "Can/Drivers/Pd42s1/Pd42s1Protocol.h"
+#    include "Can/Protocols/Private/Pd42s1/Pd42s1Protocol.h"
 #    include "Stepping.h"
 #    include "Protocol.h"
 #    include "Machine/Axes.h"
@@ -119,6 +119,10 @@ namespace MotorDrivers {
         constexpr uint32_t RETRY_MS               = 500;
         constexpr uint32_t WARN_INTERVAL_MS       = 5000;
         constexpr uint32_t POSITION_UNITS_PER_REV = 51200;
+
+        // Throttle for the broadcast echo-recovery fallback, so several motors
+        // resynchronising at the same time do not flood the bus.
+        uint32_t echoRecoveryThrottleMs = 0;
 
         uint32_t now_ms() {
             return uint32_t(esp_timer_get_time() / 1000);
@@ -277,7 +281,7 @@ namespace MotorDrivers {
         // timed-out transaction would otherwise look like the start of this
         // response, and a stale frame could even carry the expected length.
         _bus->flush_receive();
-        if (!_bus->send_message(request, requestLen, timeoutMs)) {
+        if (!_bus->send_message(Pd42s1Protocol::CAN_COMMAND_ID, request, requestLen, timeoutMs)) {
             _bus->flush_receive();
             _bus->flush_transmit();
             return false;
@@ -343,6 +347,62 @@ namespace MotorDrivers {
             }
         }
         return false;
+    }
+
+    // Auto-configuration leaves the drivers' command echo disabled, but normal
+    // control needs acknowledgments.  The motor owns this recovery path so it
+    // only depends on the generic transport, not on the diagnostic driver
+    // object.  The addressed form is tried first because a broadcast can be
+    // missed by exactly the silent driver we are trying to recover.
+    void Pd42s1Motor::enable_echo() {
+        if (!_bus || !_bus->ready()) {
+            return;
+        }
+        uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t echo = 0;  // 0 = acknowledge commands
+        size_t  len  = Pd42s1Protocol::build_frame(uint8_t(_address), Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, request, sizeof(request));
+        if (!len) {
+            return;
+        }
+        CanBus::Lock lock(*_bus);
+        _bus->send_message(Pd42s1Protocol::CAN_COMMAND_ID, request, len, 50);
+        vTaskDelay(pdMS_TO_TICKS(2));
+        _bus->flush_receive();
+    }
+
+    void Pd42s1Motor::ensure_echo() {
+        // Last-resort broadcast recovery, throttled so several motors
+        // resynchronising at the same time do not flood the bus.
+        if (!_bus || !_bus->ready()) {
+            return;
+        }
+        const uint32_t now = now_ms();
+        if (echoRecoveryThrottleMs != 0 && now - echoRecoveryThrottleMs < 3000) {
+            return;
+        }
+        echoRecoveryThrottleMs = now;
+
+        uint8_t broadcast[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t addressed[Pd42s1Protocol::MAX_FRAME_LEN];
+        uint8_t echo = 0;  // 0 = acknowledge commands
+        size_t  broadcastLen =
+            Pd42s1Protocol::build_frame(0, Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, broadcast, sizeof(broadcast));
+        size_t addressedLen =
+            Pd42s1Protocol::build_frame(uint8_t(_address), Pd42s1Protocol::FUNC_SET_ECHO, &echo, 1, addressed, sizeof(addressed));
+        if (!broadcastLen && !addressedLen) {
+            return;
+        }
+        CanBus::Lock lock(*_bus);
+        if (broadcastLen) {
+            _bus->send_message(Pd42s1Protocol::CAN_COMMAND_ID, broadcast, broadcastLen, 50);
+            vTaskDelay(pdMS_TO_TICKS(5));
+            _bus->flush_receive();
+        }
+        if (addressedLen) {
+            _bus->send_message(Pd42s1Protocol::CAN_COMMAND_ID, addressed, addressedLen, 50);
+            vTaskDelay(pdMS_TO_TICKS(2));
+            _bus->flush_receive();
+        }
     }
 
     bool Pd42s1Motor::clear_fault() {
@@ -441,13 +501,14 @@ namespace MotorDrivers {
             // Auto-configuration leaves command echo disabled, but normal
             // control needs acknowledgments.  Try this motor's address first;
             // a broadcast can be missed by exactly the silent driver we are
-            // trying to recover.  Then fall back to the all-address recovery.
-            _bus->enable_driver_echo(uint8_t(_address));
+            // trying to recover.  Then fall back to a broadcast + addressed
+            // recovery, throttled across all motors.
+            enable_echo();
             vTaskDelay(pdMS_TO_TICKS(10));
             ok = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
                  Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
             if (!ok) {
-                _bus->ensure_driver_echo();
+                ensure_echo();
                 vTaskDelay(pdMS_TO_TICKS(30));
                 ok = transact_retry(request, len, response, sizeof(response), responseLen, TRANSACTION_TIMEOUT_MS, 2) &&
                      Pd42s1Protocol::parse_version(response, responseLen, firmwareVersion, hardwareVersion);
@@ -720,7 +781,7 @@ namespace MotorDrivers {
             _targetDirty = true;
             return false;
         }
-        if (!_bus->send_message(request, len, TRANSACTION_TIMEOUT_MS)) {
+        if (!_bus->send_message(Pd42s1Protocol::CAN_COMMAND_ID, request, len, TRANSACTION_TIMEOUT_MS)) {
             _bus->flush_transmit();
             _targetDirty = true;
             _writeFailures++;
@@ -749,7 +810,7 @@ namespace MotorDrivers {
         }
         {
             Machine::CanBus::Lock lock(*_bus);
-            _bus->send_message(request, len, TRANSACTION_TIMEOUT_MS);
+            _bus->send_message(Pd42s1Protocol::CAN_COMMAND_ID, request, len, TRANSACTION_TIMEOUT_MS);
             _bus->flush_receive();
         }
         _targetDirty = false;
@@ -973,4 +1034,3 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
-

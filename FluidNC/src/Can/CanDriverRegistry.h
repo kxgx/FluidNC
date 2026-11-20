@@ -16,19 +16,21 @@
 namespace Machine {
     class CanBus;
 
-    // Transitional factory signature: pd42s1 currently reuses the CanBus
-    // object itself, while a standalone vendor driver can ignore the argument.
+    // Factory signature for a vendor driver: the driver receives the generic
+    // bus transport and owns all protocol-specific logic.
     using CanDriverFactory = CanDriver* (*)(CanBus* bus);
 
     class CanDriverRegistry {
     public:
-        static void add(const char* name, CanDriverFactory factory) {
+        // isDefault marks the driver selected when can.driver is omitted.  The
+        // first registered default wins.
+        static void add(const char* name, CanDriverFactory factory, bool isDefault = false) {
             for (const auto& entry : entries()) {
                 if (std::strcmp(entry.name, name) == 0) {
                     return;
                 }
             }
-            entries().push_back(Entry { name, factory });
+            entries().push_back(Entry { name, factory, isDefault });
         }
 
         static bool known(const char* name) {
@@ -49,6 +51,17 @@ namespace Machine {
             return nullptr;
         }
 
+        // Name used when can.driver is empty.  Returns nullptr when no driver
+        // is registered at all.
+        static const char* default_name() {
+            for (const auto& entry : entries()) {
+                if (entry.isDefault) {
+                    return entry.name;
+                }
+            }
+            return entries().empty() ? nullptr : entries().front().name;
+        }
+
         static std::string names() {
             std::string result;
             for (const auto& entry : entries()) {
@@ -64,6 +77,7 @@ namespace Machine {
         struct Entry {
             const char*      name;
             CanDriverFactory factory;
+            bool             isDefault;
         };
 
         static std::vector<Entry>& entries() {
@@ -73,7 +87,9 @@ namespace Machine {
     };
 
     struct CanDriverRegistration {
-        CanDriverRegistration(const char* name, CanDriverFactory factory) { CanDriverRegistry::add(name, factory); }
+        CanDriverRegistration(const char* name, CanDriverFactory factory, bool isDefault = false) {
+            CanDriverRegistry::add(name, factory, isDefault);
+        }
     };
 }
 

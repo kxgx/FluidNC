@@ -706,7 +706,12 @@ def resolve_int_arg(tok, int_constants):
     known symbolic constant. Returns the token unchanged if unresolvable."""
     if not isinstance(tok, str):
         return tok
-    s = tok.strip().rstrip("fF")
+    raw = tok.strip()
+    try:
+        return int(raw, 0)
+    except ValueError:
+        pass
+    s = raw.rstrip("fF")
     try:
         return int(s, 0)
     except ValueError:

@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "Motors/ZdtProtocol.h"
+#include "Can/Protocols/Private/Zdt/ZdtProtocol.h"
 
 #include <cstdint>
 

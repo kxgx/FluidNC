@@ -9,7 +9,7 @@
 
 #    include "Can/CanBus.h"
 #    include "Motors/MotorDriver.h"
-#    include "Can/Drivers/Zdt/ZdtProtocol.h"
+#    include "Can/Protocols/Private/Zdt/ZdtProtocol.h"
 
 #    include <string>
 
@@ -149,5 +149,3 @@ namespace MotorDrivers {
 }
 
 #endif
-
-

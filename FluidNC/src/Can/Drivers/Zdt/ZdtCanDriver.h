@@ -19,6 +19,7 @@ namespace Machine {
         explicit ZdtCanDriver(CanBus* bus) : _bus(bus) {}
 
         const char* driver_name() const override { return "zdt"; }
+        CanProtocolClass protocol_class() const override { return CanProtocolClass::Private; }
         bool        init_driver() override;
         int         scan() override;
         int         scan_all_bauds() override;
@@ -51,5 +52,3 @@ namespace Machine {
 }
 
 #endif
-
-

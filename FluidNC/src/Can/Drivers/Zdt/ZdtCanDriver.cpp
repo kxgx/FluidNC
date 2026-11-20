@@ -8,7 +8,7 @@
 #    include "ZdtCanDriver.h"
 
 #    include "Can/CanDriverRegistry.h"
-#    include "Can/Drivers/Zdt/ZdtProtocol.h"
+#    include "Can/Protocols/Private/Zdt/ZdtProtocol.h"
 #    include "Report.h"
 
 using namespace MotorDrivers;
@@ -233,5 +233,3 @@ namespace Machine {
 }
 
 #endif
-
-

@@ -86,16 +86,20 @@ idf_component_register(SRCS BTConfig.cpp
 							Machine/Motor.cpp
 							Machine/ProbeEventPin.cpp
 							Can/CanBus.cpp
+							Can/Drivers/Canopen/CanopenDriver.cpp
 							Can/Drivers/Zdt/ZdtCanDriver.cpp
 							Can/NullCanDriver.cpp
+							Can/Protocols/Standard/Canopen/CanopenProtocol.cpp
 							Machine/SPIBus.cpp
 							Machine/UserInputs.cpp
 							Machine/UserOutputs.cpp
 							Motors/Dynamixel2.cpp
 							Motors/MotorDriver.cpp
 							Motors/NullMotor.cpp
+							Motors/CanopenMotor.cpp
 							Motors/Pd42s1Motor.cpp
-							Can/Drivers/Pd42s1/Pd42s1Protocol.cpp
+							Can/Drivers/Pd42s1/Pd42s1Driver.cpp
+							Can/Protocols/Private/Pd42s1/Pd42s1Protocol.cpp
 							Motors/PwmServo.cpp
 							Motors/RcServo.cpp
 							Motors/Servo.cpp
@@ -111,7 +115,7 @@ idf_component_register(SRCS BTConfig.cpp
 							Motors/TMC5160ProDriver.cpp
 							Motors/TrinamicBase.cpp
 							Motors/ZdtMotor.cpp
-							Can/Drivers/Zdt/ZdtProtocol.cpp
+							Can/Protocols/Private/Zdt/ZdtProtocol.cpp
 							Motors/TrinamicSpiDriver.cpp
 							Motors/TrinamicUartDriver.cpp
 							Motors/UnipolarMotor.cpp

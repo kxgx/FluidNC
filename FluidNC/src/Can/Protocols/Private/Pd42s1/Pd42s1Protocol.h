@@ -34,6 +34,12 @@ namespace MotorDrivers {
         static constexpr uint8_t FRAME_HEAD = 0xC5;
         static constexpr uint8_t FRAME_TAIL = 0x5C;
 
+        // Fixed 29-bit extended CAN identifier for frames sent from the
+        // controller to a PD42S1.  The motion path uses this copy of the
+        // protocol constant; the diagnostic/command driver
+        // (Pd42s1Driver::CAN_COMMAND_ID) carries the same fixed value.
+        static constexpr uint32_t CAN_COMMAND_ID = 0x1000;
+
         // Command status byte in a response frame.
         static constexpr uint8_t STATUS_OK = 0x01;
 

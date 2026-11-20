@@ -151,6 +151,16 @@ SECTIONS = [
         "Requires a can: section and a unique bus address.",
     ),
     (
+        "axes.<letter>.motorN.canopen",
+        [("Motors/CanopenMotor.h", "CanopenMotor")],
+        "Standard CANopen (CiA301) / CiA402 drive profile over 11-bit CAN frames -- vendor "
+        "independent, not a private protocol.  The default COB-IDs and object dictionary are "
+        "the CiA301/CiA402 ones, so the *_index and sdo_*_cobid overrides are only needed for "
+        "a drive whose dictionary deviates.  Requires can.driver: canopen.  UNVERIFIED: the "
+        "Zhang Datou X42S V2.0 / X28S V2.0 manuals do not document a CANopen object "
+        "dictionary, so the CiA402 defaults are assumed and must be checked on hardware.",
+    ),
+    (
         "axes.<letter>.motorN.unipolar",
         [("Motors/UnipolarMotor.h", "UnipolarMotor")],
         "Reversing a unipolar axis means swapping the phase pin assignments -- phase0 with phase3 and phase1 with phase2. There is no direction pin to mark :low, and the driver applies no direction inversion of its own.",
