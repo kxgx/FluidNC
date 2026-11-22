@@ -1,30 +1,30 @@
 /* List of files and sections to place in RAM instead of FLASH */
 /* See README.md in this directory for a complete explanation */
 
-    *Laser.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
+    *Laser.cpp.o(.rodata .rodata.*)
 
     /* All files whose name ends with Spindle.cpp */
-    **Spindle.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
+    **Spindle.cpp.o(.rodata .rodata.*)
 
     /* Motors */
-    *Motor.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *Dynamixel2.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *MotorDriver.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *NullMotor.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *RcServo.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *Servo.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *Solenoid.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *StandardStepper.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *StepStick.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *TMC*Driver.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *TrinamicBase.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *TrinamicSpiDriver.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *TrinamicUartDriver.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *UnipolarMotor.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
+    *Motor.cpp.o(.rodata .rodata.*)
+    *Dynamixel2.cpp.o(.rodata .rodata.*)
+    *MotorDriver.cpp.o(.rodata .rodata.*)
+    *NullMotor.cpp.o(.rodata .rodata.*)
+    *RcServo.cpp.o(.rodata .rodata.*)
+    *Servo.cpp.o(.rodata .rodata.*)
+    *Solenoid.cpp.o(.rodata .rodata.*)
+    *StandardStepper.cpp.o(.rodata .rodata.*)
+    *StepStick.cpp.o(.rodata .rodata.*)
+    *TMC*Driver.cpp.o(.rodata .rodata.*)
+    *TrinamicBase.cpp.o(.rodata .rodata.*)
+    *TrinamicSpiDriver.cpp.o(.rodata .rodata.*)
+    *TrinamicUartDriver.cpp.o(.rodata .rodata.*)
+    *UnipolarMotor.cpp.o(.rodata .rodata.*)
 
     /* Pin Details */
-    **Detail.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *PwmPin.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-    *Pin.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-	*PinExtenderDriver.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-	*Extender.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
+    **Detail.cpp.o(.rodata .rodata.*)
+    *PwmPin.cpp.o(.rodata .rodata.*)
+    *Pin.cpp.o(.rodata .rodata.*)
+	*PinExtenderDriver.cpp.o(.rodata .rodata.*)
+	*Extender.cpp.o(.rodata .rodata.*)

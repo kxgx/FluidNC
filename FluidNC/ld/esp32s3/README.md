@@ -72,21 +72,24 @@ the modified esp32.project.ld instead of the stock version.
 
 ### Contents of vtable_in_dram.ld
 
-The section types that must go into RAM are ".rodata" and ".xt.prop".
+The section types that must go into RAM are ".rodata".  The ".xt.prop"
+sections are ELF-only debugger/disassembler metadata: the ESP-IDF linker
+script places them in a non-loadable output section, so they are not
+present in the final binary and must not be forced into DRAM.
 vtable_in_dram.ld contains lines like
 
 ```
-   **Spindle.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-   *Dynamixel2.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
-   *StepStick.cpp.o(.rodata .rodata.* .xt.prop .xt.prop.*)
+   **Spindle.cpp.o(.rodata .rodata.*)
+   *Dynamixel2.cpp.o(.rodata .rodata.*)
+   *StepStick.cpp.o(.rodata .rodata.*)
 ```
 
 The "*Spindle" line affects all files whose names end with "Spindle.cpp",
-specifying that their .rodata and .xt.prop sections are to be placed
-in RAM (because these lines are included from a dram section in the
-enclosing .ld file).  The "Dynamixel2" and "StepStick" similarly affect
-individual files.  We must list all files that are to be affected,
-either individually or via a pattern.
+specifying that their .rodata sections are to be placed in RAM (because
+these lines are included from a dram section in the enclosing .ld file).
+The "Dynamixel2" and "StepStick" similarly affect individual files.  We
+must list all files that are to be affected, either individually or via a
+pattern.
 
 ### Implications and Possible Improvements
 

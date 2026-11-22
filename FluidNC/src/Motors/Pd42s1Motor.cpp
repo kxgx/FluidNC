@@ -33,6 +33,13 @@ namespace MotorDrivers {
         return state_is(State::Cycle) || state_is(State::Homing) || state_is(State::Jog) || state_is(State::Hold);
     }
 
+    static bool final_ack_allowed() {
+        // Parking moves run under SafetyDoor/Sleep, which are not covered by
+        // motion_state_active(); do not put an acknowledged 300 ms transaction
+        // into those moves either.
+        return !motion_state_active() && !state_is(State::SafetyDoor) && !state_is(State::Sleep);
+    }
+
     // Static registry for sync_group batching.  Configuration is loaded before
     // the CAN worker starts, so no lock is needed here.
     std::vector<Pd42s1Motor*> Pd42s1Motor::_instances;
@@ -132,7 +139,7 @@ namespace MotorDrivers {
         // it needs the driver's application ACK and is only sent after motion
         // has stopped.
         for (Pd42s1Motor* m : _instances) {
-            if (m->_syncGroup == _syncGroup && m->_synced && !m->_disabled &&
+            if (final_ack_allowed() && m->_syncGroup == _syncGroup && m->_synced && !m->_disabled &&
                 !m->_finalTargetAcked && int32_t(nowMs - m->_lastTargetChangeMs) > 50) {
                 if (m->send_target(m->_lastTarget, 50)) {
                     m->_finalTargetAcked = true;
@@ -1167,7 +1174,7 @@ namespace MotorDrivers {
                             _finalTargetAcked   = false;
                         }
                         send_target_nowait(target);
-                    } else if (!_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
+                    } else if (final_ack_allowed() && !_finalTargetAcked && int32_t(nowMs - _lastTargetChangeMs) > 50) {
                         // Motion has stopped; re-send the final target with an
                         // acknowledgement so a dropped fire-and-forget frame
                         // cannot leave the axis a few millimetres short.
@@ -1207,4 +1214,3 @@ namespace MotorDrivers {
 }
 
 #endif  // MAX_N_CAN
-

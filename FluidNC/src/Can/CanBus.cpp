@@ -731,7 +731,9 @@ namespace Machine {
         _stop_requested = false;
         _task_exited    = false;
 
-        if (xTaskCreate(worker_entry, "can", 4096, this, 2, &_task_handle) != pdPASS) {
+        // Keep the CAN target/stop worker on the motion core instead of letting
+        // the scheduler place it on core0 where WiFi/lwIP/AsyncTCP preempt it.
+        if (xTaskCreatePinnedToCore(worker_entry, "can", 4096, this, 2, &_task_handle, 1) != pdPASS) {
             can_log_error("CAN: cannot create worker task");
             _task_handle = nullptr;
         }
@@ -765,7 +767,7 @@ namespace Machine {
                 vTaskDelay(pdMS_TO_TICKS(20));
             }
 
-            if (now - _last_state_check_ms >= 500) {
+            if (now - _last_state_check_ms >= 20) {
                 _last_state_check_ms = now;
                 check_state();
             }
