@@ -181,6 +181,40 @@ void gpio_rearm(int32_t gpio_num) {
     }
 }
 
+static TaskHandle_t gpioPollTask    = nullptr;
+static bool         gpioPollStarted = false;
+
+static void gpio_poll_loop(void*) {
+    for (;;) {
+        poll_gpios();
+        vTaskDelay(pdMS_TO_TICKS(1));
+    }
+}
+
+bool gpio_polling_started() {
+    return gpioPollStarted;
+}
+
+void start_gpio_polling() {
+    if (gpioPollTask) {
+        return;
+    }
+    BaseType_t rc;
+#if portNUM_PROCESSORS > 1
+    // Keep limit/control input sampling off the low-priority serial poller;
+    // this task only reads GPIO registers and posts events.
+    rc = xTaskCreatePinnedToCore(gpio_poll_loop, "gpio_in", 2048, nullptr, 3, &gpioPollTask, 1);
+#else
+    rc = xTaskCreate(gpio_poll_loop, "gpio_in", 2048, nullptr, 3, &gpioPollTask);
+#endif
+    if (rc == pdPASS) {
+        gpioPollStarted = true;
+    } else {
+        gpioPollTask = nullptr;
+        log_error("GPIO: cannot create input polling task; falling back to serial poller");
+    }
+}
+
 void poll_gpios() {
     gpio_mask_t gpios_active  = get_gpios();
     gpio_mask_t gpios_changed = (gpios_active ^ gpios_current) & gpios_interest;

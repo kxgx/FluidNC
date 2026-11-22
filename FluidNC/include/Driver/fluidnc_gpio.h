@@ -27,6 +27,8 @@ void gpio_clear_event(int32_t gpio_num);
 void gpio_disarm(int32_t gpio_num);  // Prevent further events until rearmed
 void gpio_rearm(int32_t gpio_num);   // Rearm individual GPIO and send pending inactive event
 void poll_gpios();
+void start_gpio_polling();
+bool gpio_polling_started();
 
 #ifdef __cplusplus
 }

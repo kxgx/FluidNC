@@ -23,6 +23,9 @@
 #define MAX_N_GPIO SOC_GPIO_PIN_COUNT /* 49 */
 #define DEFAULT_STEPPING_ENGINE Stepping::TIMED
 
+// This platform has a dedicated high-priority GPIO input polling task.
+#define HAS_GPIO_POLL_TASK 1
+
 #define STEPPING_FREQUENCY 20000000
 
 // Serial baud rate

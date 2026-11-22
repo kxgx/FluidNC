@@ -257,7 +257,16 @@ Channel* AllChannels::poll(char* line) {
 AllChannels allChannels;
 
 Channel* pollChannels(char* line) {
+#if defined(HAS_GPIO_POLL_TASK)
+    // GPIO/limit inputs are normally sampled by the dedicated high-priority
+    // gpio_in task.  If that task failed to start, keep the old poller path so
+    // inputs cannot silently stop being sampled.
+    if (!gpio_polling_started()) {
+        poll_gpios();
+    }
+#else
     poll_gpios();
+#endif
     // Throttle polling when we are not ready for a line, thus preventing
     // planner buffer starvation due to not calling Stepper::prep_buffer()
     // frequently enough, which is normally called periodically at the end

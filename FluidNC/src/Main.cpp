@@ -175,6 +175,9 @@ void setup() {
     }
 
     poll_gpios();  // Initial poll to send events for initial pin states
+#if defined(HAS_GPIO_POLL_TASK)
+    start_gpio_polling();
+#endif
 
     allChannels.ready();
     allChannels.deregistration(&startupLog);
