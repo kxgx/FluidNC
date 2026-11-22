@@ -87,6 +87,12 @@ jobs:
             psram: Octal
             oled: yes
             usb: yes
+          - env: wifi_s3_octalPSRAM_oled_usb_16mb
+            label: octal-oled-usb-16mb
+            flash: 16MB
+            psram: Octal
+            oled: yes
+            usb: yes
           - env: wifi_s3_oled_usb_4mb
             label: quad-oled-usb-4mb
             flash: 4MB
@@ -243,6 +249,7 @@ jobs:
             | `octal` | `wifi_s3_octalPSRAM` | 8 MB | Octal | No | No | `fluidcan-<tag>-octal.zip` |
             | `quad-oled-usb` | `wifi_s3_oled_usb` | 8 MB | Quad | Yes | Yes | `fluidcan-<tag>-quad-oled-usb.zip` |
             | `octal-oled-usb` | `wifi_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb.zip` |
+            | `octal-oled-usb-16mb` | `wifi_s3_octalPSRAM_oled_usb_16mb` | 16 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb-16mb.zip` |
             | `quad-oled-usb-4mb` | `wifi_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `fluidcan-<tag>-quad-oled-usb-4mb.zip` |
             | `octal-oled-usb-4mb` | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb-4mb.zip` |
             | `nopsram-oled-usb-4mb` | `wifi_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `fluidcan-<tag>-nopsram-oled-usb-4mb.zip` |

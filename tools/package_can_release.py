@@ -86,6 +86,14 @@ VARIANTS = [
         "usb": "Yes",
     },
     {
+        "label": "octal-oled-usb-16mb",
+        "env": "wifi_s3_octalPSRAM_oled_usb_16mb",
+        "flash": "16 MB",
+        "psram": "Octal",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
+    {
         "label": "quad-oled-usb-4mb",
         "env": "wifi_s3_oled_usb_4mb",
         "flash": "4 MB",
