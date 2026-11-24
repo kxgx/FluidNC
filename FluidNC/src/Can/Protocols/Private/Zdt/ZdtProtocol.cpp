@@ -135,8 +135,9 @@ namespace MotorDrivers {
                                                 ZdtChecksum  checksumMode,
                                                 uint8_t*     out,
                                                 size_t       capacity,
-                                                double*      angle_residual) {
-        if (counts_per_rev == 0 || delta_counts == 0) {
+                                                double*      angle_residual,
+                                                uint8_t      position_mode) {
+        if (counts_per_rev == 0 || delta_counts == 0 || position_mode != 0) {
             return 0;
         }
         const bool     negative = delta_counts < 0;
@@ -153,8 +154,8 @@ namespace MotorDrivers {
             put16(out + 3, velocity);
             out[5] = uint8_t(std::min<uint32_t>(accel, 255u));  // Emm ramp setting
             put32(out + 6, magnitude);
-            out[10] = 0;  // relative to the previous target position
-            out[11] = 0;  // do not defer with the multi-machine sync flag
+            out[10] = position_mode;  // relative to the previous target position by default
+            out[11] = 0;              // do not defer with the multi-machine sync flag
             return finish(out, 12, checksumMode);
         }
 
@@ -186,9 +187,37 @@ namespace MotorDrivers {
         put16(out + 5, accel);  // deceleration in RPM/s
         put16(out + 7, velocity01);
         put32(out + 9, uint32_t(xMagnitude));
-        out[13] = 0;  // relative to the previous target position
-        out[14] = 0;  // do not defer with the multi-machine sync flag
+        out[13] = position_mode;  // relative to the previous target position by default
+        out[14] = 0;              // do not defer with the multi-machine sync flag
         return finish(out, 15, checksumMode);
+    }
+
+    uint16_t ZdtProtocol::speed_rpm_for_counts(
+        int32_t delta_counts, uint32_t counts_per_rev, uint32_t elapsed_ms, uint16_t max_rpm, uint8_t margin_percent) {
+        if (delta_counts == 0 || counts_per_rev == 0 || elapsed_ms == 0 || max_rpm == 0) {
+            return 0;
+        }
+        const uint64_t magnitude = delta_counts < 0 ? uint64_t(-int64_t(delta_counts)) : uint64_t(delta_counts);
+        const uint64_t denominator = uint64_t(counts_per_rev) * uint64_t(elapsed_ms);
+        if (denominator == 0) {
+            return 0;
+        }
+        // Ceil so a streamed delta is never slower than the step stream that
+        // produced it.  This is a following limit, not a target speed.  The
+        // optional margin restores some catch-up headroom instead of sending
+        // exactly the average stream rate.
+        const uint64_t numerator = magnitude * 60000ull;
+        uint64_t       rpm       = (numerator + denominator - 1) / denominator;
+        if (margin_percent) {
+            rpm = (rpm * (100ull + margin_percent) + 99ull) / 100ull;
+        }
+        if (rpm > max_rpm) {
+            rpm = max_rpm;
+        }
+        if (rpm == 0) {
+            rpm = 1;  // Emm speed field minimum
+        }
+        return uint16_t(rpm);
     }
 
     bool ZdtProtocol::parse_ack(const uint8_t* data, size_t len, uint8_t function) {

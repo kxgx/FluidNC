@@ -89,6 +89,43 @@ namespace MotorDrivers {
             // @tuning typical
             // Interval between streamed relative-position commands.
             handler.item("update_ms", _updateMs, 2, 1000);
+
+            // @config mode
+            // @default "position_stream"
+            // @tuning per-machine
+            // Motion contract for this motor.  Only position_stream is
+            // implemented: the driver receives a relative 0xFD position
+            // increment every update_ms.  Future modes must fail closed.
+            handler.item("mode", _modeName, 1, 32);
+
+            // @config position_mode
+            // @default "relative_previous"
+            // @tuning per-machine
+            // Position command base.  Only relative_previous (the ZDT 0xFD
+            // mode-0 behavior used by the current smooth streaming path) is
+            // implemented; absolute/current-position modes are rejected.
+            handler.item("position_mode", _positionModeName, 1, 32);
+
+            // @config speed_source
+            // @default "fixed"
+            // @tuning per-machine
+            // fixed: send speed_rpm on every command, exactly as before.
+            // planner: derive the ZDT following speed from the actual
+            // executed step delta, so G-code feed/override changes and
+            // homing/jog ramps are reflected without changing the position
+            // stream.  speed_rpm remains the upper clamp.  planner is an
+            // experimental Emm-only mode; fixed preserves the historical
+            // smooth position stream byte-for-byte.
+            handler.item("speed_source", _speedSourceName, 1, 16);
+
+            // @config speed_margin_pct
+            // @default 25
+            // @tuning per-machine
+            // Catch-up margin used only by speed_source=planner.  The
+            // following speed is raised by this percentage before the
+            // speed_rpm clamp, so a short following lag can recover without
+            // making the drive run at a fixed speed.  Ignored by fixed.
+            handler.item("speed_margin_pct", _speedMarginPct, 0, 100);
         }
 
         bool set_homing_mode(bool isHoming) override { return true; }
@@ -121,7 +158,7 @@ namespace MotorDrivers {
     private:
         bool           send_enable(bool enable);
         bool           send_stop();
-        bool           send_move(int32_t delta_counts);
+        bool           send_move(int32_t delta_counts, uint16_t speed_rpm);
         bool           transact(const uint8_t* request, size_t length, uint8_t function, uint8_t* response, size_t& response_len);
         void           report_motion_fault(const char* reason);
 
@@ -129,17 +166,23 @@ namespace MotorDrivers {
         axis_t           _axis = X_AXIS;
 
         int32_t    _address      = 1;
-        std::string _firmwareName = "Emm";
-        std::string _checksumName = "6B";
+        std::string _firmwareName    = "Emm";
+        std::string _checksumName    = "6B";
+        std::string _modeName        = "position_stream";
+        std::string _positionModeName = "relative_previous";
+        std::string _speedSourceName = "fixed";
         int32_t  _countsPerRev = 3200;
         float    _countsPerStep = 1.0f;
         int32_t  _speedRpm     = 600;
+        int32_t  _speedMarginPct = 25;
         int32_t  _accel        = 80;
         uint32_t _updateMs     = 20;
         bool     _invertDirection = false;
 
-        ZdtFirmware _firmware = ZdtFirmware::Emm;
-        ZdtChecksum _checksum = ZdtChecksum::Fixed6B;
+        ZdtFirmware     _firmware     = ZdtFirmware::Emm;
+        ZdtChecksum     _checksum     = ZdtChecksum::Fixed6B;
+        ZdtPositionMode _positionMode = ZdtPositionMode::RelativePrevious;
+        bool            _plannerSpeed = false;
 
         volatile int32_t _stepCount = 0;
         volatile bool    _direction = false;
@@ -157,6 +200,7 @@ namespace MotorDrivers {
         uint32_t _ackFailures   = 0;
         uint32_t _txFailures    = 0;
         uint32_t _nextPollMs    = 0;
+        uint32_t _lastSendMs    = 0;
         uint32_t _lastAckWarnMs = 0;
     };
 }

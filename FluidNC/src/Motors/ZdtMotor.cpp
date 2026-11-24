@@ -47,8 +47,24 @@ namespace MotorDrivers {
         Assert(_countsPerRev > 0, "zdt counts_per_rev must be positive");
         Assert(_countsPerStep > 0.0f, "zdt counts_per_step must be positive");
         Assert(_speedRpm >= 1 && _speedRpm <= 3000, "zdt speed_rpm must be 1..3000 for the X42S free protocol");
+        Assert(_speedMarginPct >= 0 && _speedMarginPct <= 100, "zdt speed_margin_pct must be 0..100");
         Assert(_accel >= 0 && _accel <= 65535, "zdt accel must be 0..65535");
         Assert(_updateMs >= 2 && _updateMs <= 1000, "zdt update_ms must be 2..1000");
+
+        Assert(string_util::equal_ignore_case(_modeName, "position_stream"),
+               "zdt mode must be position_stream; other motion modes are not implemented");
+        if (string_util::equal_ignore_case(_positionModeName, "relative_previous")) {
+            _positionMode = ZdtPositionMode::RelativePrevious;
+        } else {
+            Assert(false, "zdt position_mode must be relative_previous; absolute/current modes are not implemented");
+        }
+        if (string_util::equal_ignore_case(_speedSourceName, "fixed")) {
+            _plannerSpeed = false;
+        } else if (string_util::equal_ignore_case(_speedSourceName, "planner")) {
+            _plannerSpeed = true;
+        } else {
+            Assert(false, "zdt speed_source must be fixed or planner");
+        }
 
         if (string_util::equal_ignore_case(_firmwareName, "X")) {
             _firmware = ZdtFirmware::X;
@@ -61,6 +77,22 @@ namespace MotorDrivers {
             Assert(_accel >= 0 && _accel <= 255, "zdt Emm accel is the native 0..255 ramp setting");
         } else {
             Assert(_accel >= 1, "zdt X accel is RPM/s and must be at least 1");
+        }
+        if (_plannerSpeed) {
+            // The streamed following speed must be able to cover the axis's
+            // configured maximum feed.  Otherwise the target stream would
+            // outrun the drive and leave an invisible following error.
+            Assert(_firmware == ZdtFirmware::Emm, "zdt speed_source=planner currently requires firmware Emm");
+            auto   axisConfig  = Axes::_axis[axis_index()];
+            double requiredRpm = double(axisConfig->_maxRate) * double(axisConfig->_stepsPerMm) * double(_countsPerStep) /
+                               double(_countsPerRev);
+            // The margin is applied before the speed_rpm clamp, so speed_rpm
+            // must cover the margin too; otherwise the configured catch-up
+            // headroom would silently disappear at maximum feed.
+            double requiredWithMargin = requiredRpm * (100.0 + double(_speedMarginPct)) / 100.0;
+            int    required           = int(std::ceil(requiredWithMargin));
+            Assert(_speedRpm >= required,
+                   "zdt speed_rpm is below the axis maximum feed plus speed_margin_pct for speed_source=planner");
         }
 
         if (string_util::equal_ignore_case(_checksumName, "XOR")) {
@@ -86,11 +118,13 @@ namespace MotorDrivers {
         Stepping::assignMotorDriver(axis_index(), dual_axis_index(), this);
         _lastSentSteps = _stepCount;
         _nextPollMs    = 0;
+        _lastSendMs    = 0;
     }
 
     void ZdtMotor::config_message() {
         log_info("    " << name() << " CAN address:" << _address << " firmware:" << _firmwareName << " checksum:" << _checksumName
-                        << " counts_per_rev:" << _countsPerRev << " counts_per_step:" << _countsPerStep);
+                        << " counts_per_rev:" << _countsPerRev << " counts_per_step:" << _countsPerStep
+                        << " mode:" << _modeName << " speed_source:" << _speedSourceName);
     }
 
     void ZdtMotor::step_isr() {
@@ -125,12 +159,14 @@ namespace MotorDrivers {
         // stale target.
         _lastSentSteps = _stepCount;
         _residual      = 0.0;
+        _lastSendMs    = 0;
     }
 
     void ZdtMotor::on_position_zeroed() {
         _lastSentSteps  = _stepCount;
         _residual       = 0.0;
         _xAngleResidual = 0.0;
+        _lastSendMs     = 0;
         _synced         = true;
     }
 
@@ -182,6 +218,10 @@ namespace MotorDrivers {
         }
         _enabled = enable;
         _synced  = true;
+        // A new enable starts a new speed-following interval; otherwise a
+        // stale timestamp from before a disable could produce a 1 RPM first
+        // frame in planner mode.
+        _lastSendMs = 0;
         return true;
     }
 
@@ -206,19 +246,20 @@ namespace MotorDrivers {
         send_alarm(ExecAlarm::HardStop);
     }
 
-    bool ZdtMotor::send_move(int32_t delta_counts) {
+    bool ZdtMotor::send_move(int32_t delta_counts, uint16_t speed_rpm) {
         _lastSendOk = false;
         uint8_t request[ZdtProtocol::MAX_MESSAGE];
         size_t  length = ZdtProtocol::build_relative_position(_firmware,
                                                              uint8_t(_address),
                                                              delta_counts,
-                                                             uint16_t(_speedRpm),
+                                                             speed_rpm,
                                                              uint16_t(_accel),
                                                              uint32_t(_countsPerRev),
                                                              _checksum,
                                                              request,
                                                              sizeof(request),
-                                                             _firmware == ZdtFirmware::X ? &_xAngleResidual : nullptr);
+                                                             _firmware == ZdtFirmware::X ? &_xAngleResidual : nullptr,
+                                                             uint8_t(_positionMode));
         if (!length) {
             return false;
         }
@@ -242,6 +283,7 @@ namespace MotorDrivers {
                 _lastSentSteps = _stepCount;
                 _residual      = 0.0;
                 _xAngleResidual = 0.0;
+                _lastSendMs    = 0;
             } else if (++_stopFailures >= 3) {
                 _stopRequested = false;
                 _stopFailures  = 0;
@@ -267,6 +309,10 @@ namespace MotorDrivers {
         const int32_t targetSteps = _stepCount;
         const int32_t stepDelta   = targetSteps - _lastSentSteps;
         if (stepDelta == 0) {
+            // No displacement to carry a speed field.  Restart the elapsed
+            // interval so the first frame after an idle gap is not interpreted
+            // as an extremely slow move.
+            _lastSendMs = 0;
             return;
         }
 
@@ -278,10 +324,30 @@ namespace MotorDrivers {
         _residual      = scaled - double(counts);
         if (counts == 0) {
             _lastSentSteps = targetSteps;
+            _lastSendMs    = 0;
             return;
         }
 
-        bool acknowledged = send_move(counts);
+        // fixed: preserve the historical bytes exactly (always _speedRpm).
+        // planner: derive the following speed from the step stream that was
+        // actually executed; keep _speedRpm as the upper clamp.
+        uint16_t commandSpeed = uint16_t(_speedRpm);
+        if (_plannerSpeed) {
+            uint32_t elapsed = _updateMs;
+            if (_lastSendMs != 0) {
+                uint32_t measured = now_ms - _lastSendMs;
+                // A short/zero interval or a stale timestamp (worker stall,
+                // disable/enable) must not collapse the following speed to
+                // the 1 RPM floor; use the nominal update interval instead.
+                if (measured != 0 && measured <= _updateMs * 10) {
+                    elapsed = measured;
+                }
+            }
+            commandSpeed = ZdtProtocol::speed_rpm_for_counts(
+                counts, uint32_t(_countsPerRev), elapsed, uint16_t(_speedRpm), uint8_t(_speedMarginPct));
+        }
+
+        bool acknowledged = send_move(counts, commandSpeed);
         if (!_lastSendOk) {
             if (++_txFailures >= 3) {
                 _txFailures = 0;
@@ -301,6 +367,7 @@ namespace MotorDrivers {
             // the response was lost or the driver's Response mode is None;
             // replaying a relative move after a lost ACK would move twice.
             _lastSentSteps = targetSteps;
+            _lastSendMs    = now_ms;
             if (acknowledged) {
                 _ackFailures = 0;
             } else {

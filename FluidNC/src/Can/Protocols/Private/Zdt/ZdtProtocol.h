@@ -29,6 +29,12 @@ namespace MotorDrivers {
 
     enum class ZdtChecksum { Fixed6B = 0, Xor = 1, Crc8 = 2 };
 
+    // Position command mode (the 0xFD "运动模式" field in the ZDT manual).
+    // Only RelativePrevious is currently supported by the driver; the other
+    // values are reserved names so a misconfiguration can fail closed instead
+    // of silently changing the position contract.
+    enum class ZdtPositionMode : uint8_t { RelativePrevious = 0, Absolute = 1, RelativeCurrent = 2 };
+
     class ZdtProtocol {
     public:
         static constexpr size_t MAX_MESSAGE = 32;
@@ -53,7 +59,18 @@ namespace MotorDrivers {
                                               ZdtChecksum   checksum,
                                               uint8_t*      out,
                                               size_t        capacity,
-                                              double*       angle_residual = nullptr);
+                                              double*       angle_residual = nullptr,
+                                              uint8_t       position_mode = 0);
+
+        // Map an actually executed step delta to the ZDT speed field for
+        // position-stream speed following.  elapsed_ms is the time since the
+        // previous successfully transmitted position command; the result is
+        // clamped to 1..max_rpm (Emm's speed field has 1 RPM resolution).
+        static uint16_t speed_rpm_for_counts(int32_t  delta_counts,
+                                             uint32_t counts_per_rev,
+                                             uint32_t elapsed_ms,
+                                             uint16_t max_rpm,
+                                             uint8_t  margin_percent = 0);
 
         static bool parse_ack(const uint8_t* data, size_t len, uint8_t function);
         static bool parse_position(ZdtFirmware    firmware,

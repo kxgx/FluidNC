@@ -2351,6 +2351,38 @@
    "default": "20",
    "tuning": "typical",
    "description": "Interval between streamed relative-position commands.\n"
+  },
+  "mode": {
+   "type": "string",
+   "min": 1,
+   "max": 32,
+   "default": "\"position_stream\"",
+   "tuning": "per-machine",
+   "description": "Motion contract for this motor.  Only position_stream is implemented: the driver receives a relative 0xFD position increment every update_ms.  Future modes must fail closed.\n"
+  },
+  "position_mode": {
+   "type": "string",
+   "min": 1,
+   "max": 32,
+   "default": "\"relative_previous\"",
+   "tuning": "per-machine",
+   "description": "Position command base.  Only relative_previous (the ZDT 0xFD mode-0 behavior used by the current smooth streaming path) is implemented; absolute/current-position modes are rejected.\n"
+  },
+  "speed_source": {
+   "type": "string",
+   "min": 1,
+   "max": 16,
+   "default": "\"fixed\"",
+   "tuning": "per-machine",
+   "description": "fixed: send speed_rpm on every command, exactly as before. planner: derive the ZDT following speed from the actual executed step delta, so G-code feed/override changes and homing/jog ramps are reflected without changing the position stream.  speed_rpm remains the upper clamp.  planner is an experimental Emm-only mode; fixed preserves the historical smooth position stream byte-for-byte.\n"
+  },
+  "speed_margin_pct": {
+   "type": "integer",
+   "min": 0,
+   "max": 100,
+   "default": "25",
+   "tuning": "per-machine",
+   "description": "Catch-up margin used only by speed_source=planner.  The following speed is raised by this percentage before the speed_rpm clamp, so a short following lag can recover without making the drive run at a fixed speed.  Ignored by fixed.\n"
   }
  },
  "axes.<letter>.motorN.canopen": {

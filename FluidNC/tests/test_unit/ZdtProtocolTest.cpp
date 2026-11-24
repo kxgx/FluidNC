@@ -82,6 +82,33 @@ TEST(ZdtProtocol, XPositionUsesTenthsOfDegree) {
     EXPECT_EQ(frame[15], 0x6B);
 }
 
+TEST(ZdtProtocol, MapsExecutedStepDeltaToFollowingSpeed) {
+    // 16 counts in 20 ms at 3200 counts/rev = 15 RPM.
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 3200, 20, 20), 15u);
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(-16, 3200, 20, 20), 15u);
+    // One count still maps to the Emm minimum of 1 RPM.
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(1, 3200, 20, 20), 1u);
+    // Never exceed the configured following cap.
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 3200, 10, 20), 20u);
+    // Invalid/empty inputs have no speed field to send.
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(0, 3200, 20, 20), 0u);
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 0, 20, 20), 0u);
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 3200, 0, 20), 0u);
+}
+
+TEST(ZdtProtocol, SpeedMapAppliesCatchUpMargin) {
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 3200, 20, 20, 25), 19u);
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 3200, 20, 20, 100), 20u);
+    EXPECT_EQ(ZdtProtocol::speed_rpm_for_counts(16, 3200, 20, 20, 0), 15u);
+}
+
+TEST(ZdtProtocol, RejectsUnsupportedPositionMode) {
+    uint8_t frame[ZdtProtocol::MAX_MESSAGE] = {};
+    EXPECT_EQ(ZdtProtocol::build_relative_position(
+                  ZdtFirmware::Emm, 1, 3200, 600, 50, 3200, ZdtChecksum::Fixed6B, frame, sizeof(frame), nullptr, 1),
+              0u);
+}
+
 TEST(ZdtProtocol, ChecksumModes) {
     const uint8_t data[] = { 0x01, 0x06, 0x45 };
     EXPECT_EQ(ZdtProtocol::checksum(data, sizeof(data), ZdtChecksum::Fixed6B), 0x6B);

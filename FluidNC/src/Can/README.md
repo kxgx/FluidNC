@@ -57,7 +57,7 @@ defaults and wiring should differ.
 ## Current drivers
 
 - `pd42s1` — private ALIENTEK PD42S1 CAN protocol.
-- `zdt` — private Zhang Datou XS CAN protocol (Emm/X firmware, 6B/XOR/CRC8).
+- `zdt` — private Zhang Datou XS CAN protocol (Emm/X firmware, 6B/XOR/CRC8); see [`../Motors/ZdtMotor.md`](../Motors/ZdtMotor.md) for the position-stream contract, speed sources and rollback.
 - `canopen` — standard CANopen/CiA402 protocol layer.
 - `null_can` — command-surface stub; no transport.
 
