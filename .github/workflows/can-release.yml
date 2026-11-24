@@ -51,62 +51,74 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - env: wifi_s3_oled
-            label: quad-oled
-            flash: 8MB
-            psram: Quad
-            oled: yes
-            usb: no
-          - env: wifi_s3_octalPSRAM_oled
-            label: octal-oled
-            flash: 8MB
-            psram: Octal
-            oled: yes
-            usb: no
-          - env: wifi_s3
-            label: quad
-            flash: 8MB
-            psram: Quad
-            oled: no
-            usb: no
-          - env: wifi_s3_octalPSRAM
-            label: octal
-            flash: 8MB
-            psram: Octal
-            oled: no
-            usb: no
           - env: wifi_s3_oled_usb
-            label: quad-oled-usb
+            label: wifi-8mb-quad
             flash: 8MB
             psram: Quad
             oled: yes
             usb: yes
           - env: wifi_s3_octalPSRAM_oled_usb
-            label: octal-oled-usb
+            label: wifi-8mb-octal
             flash: 8MB
             psram: Octal
             oled: yes
             usb: yes
           - env: wifi_s3_octalPSRAM_oled_usb_16mb
-            label: octal-oled-usb-16mb
+            label: wifi-16mb-octal
             flash: 16MB
             psram: Octal
             oled: yes
             usb: yes
           - env: wifi_s3_oled_usb_4mb
-            label: quad-oled-usb-4mb
+            label: wifi-4mb-quad
             flash: 4MB
             psram: Quad
             oled: yes
             usb: yes
           - env: wifi_s3_octalPSRAM_oled_usb_4mb
-            label: octal-oled-usb-4mb
+            label: wifi-4mb-octal
             flash: 4MB
             psram: Octal
             oled: yes
             usb: yes
           - env: wifi_s3_oled_usb_4mb_nopsram
-            label: nopsram-oled-usb-4mb
+            label: wifi-4mb-nopsram
+            flash: 4MB
+            psram: None
+            oled: yes
+            usb: yes
+          - env: noradio_s3_oled_usb
+            label: nowifi-8mb-quad
+            flash: 8MB
+            psram: Quad
+            oled: yes
+            usb: yes
+          - env: noradio_s3_octalPSRAM_oled_usb
+            label: nowifi-8mb-octal
+            flash: 8MB
+            psram: Octal
+            oled: yes
+            usb: yes
+          - env: noradio_s3_octalPSRAM_oled_usb_16mb
+            label: nowifi-16mb-octal
+            flash: 16MB
+            psram: Octal
+            oled: yes
+            usb: yes
+          - env: noradio_s3_oled_usb_4mb
+            label: nowifi-4mb-quad
+            flash: 4MB
+            psram: Quad
+            oled: yes
+            usb: yes
+          - env: noradio_s3_octalPSRAM_oled_usb_4mb
+            label: nowifi-4mb-octal
+            flash: 4MB
+            psram: Octal
+            oled: yes
+            usb: yes
+          - env: noradio_s3_oled_usb_4mb_nopsram
+            label: nowifi-4mb-nopsram
             flash: 4MB
             psram: None
             oled: yes
@@ -213,8 +225,10 @@ jobs:
           body: |
             Automatic CAN firmware build for ESP32-S3.
 
-            Release assets are one structured zip per variant. No loose
-            firmware binaries are published.
+            USB and OLED are included in every release. Studio exposes only the
+            two radio choices (WiFi / NoWiFi) and auto-selects the hardware
+            variant from the connected device; each asset below is the
+            matching structured zip.
 
             Every zip has this layout:
 
@@ -243,16 +257,18 @@ jobs:
 
             | Variant | Env | Flash | PSRAM | OLED | USB | Release zip |
             |---|---|---|---|---|---|---|
-            | `quad-oled` (default) | `wifi_s3_oled` | 8 MB | Quad | Yes | No | `fluidcan-<tag>-quad-oled.zip` |
-            | `octal-oled` | `wifi_s3_octalPSRAM_oled` | 8 MB | Octal | Yes | No | `fluidcan-<tag>-octal-oled.zip` |
-            | `quad` | `wifi_s3` | 8 MB | Quad | No | No | `fluidcan-<tag>-quad.zip` |
-            | `octal` | `wifi_s3_octalPSRAM` | 8 MB | Octal | No | No | `fluidcan-<tag>-octal.zip` |
-            | `quad-oled-usb` | `wifi_s3_oled_usb` | 8 MB | Quad | Yes | Yes | `fluidcan-<tag>-quad-oled-usb.zip` |
-            | `octal-oled-usb` | `wifi_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb.zip` |
-            | `octal-oled-usb-16mb` | `wifi_s3_octalPSRAM_oled_usb_16mb` | 16 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb-16mb.zip` |
-            | `quad-oled-usb-4mb` | `wifi_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `fluidcan-<tag>-quad-oled-usb-4mb.zip` |
-            | `octal-oled-usb-4mb` | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `fluidcan-<tag>-octal-oled-usb-4mb.zip` |
-            | `nopsram-oled-usb-4mb` | `wifi_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `fluidcan-<tag>-nopsram-oled-usb-4mb.zip` |
+            | `wifi-8mb-quad` | `wifi_s3_oled_usb` | 8 MB | Quad | Yes | Yes | `fluidcan-<tag>-wifi-8mb-quad.zip` |
+            | `wifi-8mb-octal` | `wifi_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `fluidcan-<tag>-wifi-8mb-octal.zip` |
+            | `wifi-16mb-octal` | `wifi_s3_octalPSRAM_oled_usb_16mb` | 16 MB | Octal | Yes | Yes | `fluidcan-<tag>-wifi-16mb-octal.zip` |
+            | `wifi-4mb-quad` | `wifi_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `fluidcan-<tag>-wifi-4mb-quad.zip` |
+            | `wifi-4mb-octal` | `wifi_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `fluidcan-<tag>-wifi-4mb-octal.zip` |
+            | `wifi-4mb-nopsram` | `wifi_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `fluidcan-<tag>-wifi-4mb-nopsram.zip` |
+            | `nowifi-8mb-quad` | `noradio_s3_oled_usb` | 8 MB | Quad | Yes | Yes | `fluidcan-<tag>-nowifi-8mb-quad.zip` |
+            | `nowifi-8mb-octal` | `noradio_s3_octalPSRAM_oled_usb` | 8 MB | Octal | Yes | Yes | `fluidcan-<tag>-nowifi-8mb-octal.zip` |
+            | `nowifi-16mb-octal` | `noradio_s3_octalPSRAM_oled_usb_16mb` | 16 MB | Octal | Yes | Yes | `fluidcan-<tag>-nowifi-16mb-octal.zip` |
+            | `nowifi-4mb-quad` | `noradio_s3_oled_usb_4mb` | 4 MB | Quad | Yes | Yes | `fluidcan-<tag>-nowifi-4mb-quad.zip` |
+            | `nowifi-4mb-octal` | `noradio_s3_octalPSRAM_oled_usb_4mb` | 4 MB | Octal | Yes | Yes | `fluidcan-<tag>-nowifi-4mb-octal.zip` |
+            | `nowifi-4mb-nopsram` | `noradio_s3_oled_usb_4mb_nopsram` | 4 MB | None | Yes | Yes | `fluidcan-<tag>-nowifi-4mb-nopsram.zip` |
 
             The 4 MB variants use a single application slot. Network OTA is not
             available; use serial `write-flash 0x10000 OTA/firmware.bin` to keep
@@ -267,4 +283,3 @@ jobs:
           draft: false
           prerelease: false
           make_latest: true
-

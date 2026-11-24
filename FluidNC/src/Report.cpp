@@ -155,7 +155,11 @@ void report_init_message(Channel& channel) {
                     msg << grbl_version;
                     break;
                 case 'X':
+#ifdef FLUIDCAN_HW
+                    msg << MCU << "-" << VARIANT << "-" << FLUIDCAN_HW;
+#else
                     msg << MCU << "-" << VARIANT;
+#endif
                     break;
                 case 'R': {
                     const char* delim     = "";
@@ -363,7 +367,12 @@ void report_gcode_modes(Channel& channel) {
 void report_build_info(const char* line, Channel& channel) {
     constexpr size_t max_reported_cluster_size = 16;
 
+#ifdef FLUIDCAN_HW
+    log_stream(channel,
+               "[VER:" << grbl_version << " FluidNC " << git_info << " (" << MCU << "-" << VARIANT << "-" << FLUIDCAN_HW << ") :" << line);
+#else
     log_stream(channel, "[VER:" << grbl_version << " FluidNC " << git_info << " (" << MCU << "-" << VARIANT << ") :" << line);
+#endif
 
     // The option message is included for backwards compatibility but
     // is not particularly useful for FluidNC, which has runtime

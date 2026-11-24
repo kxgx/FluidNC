@@ -37,40 +37,7 @@ from pathlib import Path
 
 VARIANTS = [
     {
-        "label": "quad-oled",
-        "env": "wifi_s3_oled",
-        "flash": "8 MB",
-        "psram": "Quad",
-        "oled": "Yes",
-        "usb": "No",
-        "default": True,
-    },
-    {
-        "label": "octal-oled",
-        "env": "wifi_s3_octalPSRAM_oled",
-        "flash": "8 MB",
-        "psram": "Octal",
-        "oled": "Yes",
-        "usb": "No",
-    },
-    {
-        "label": "quad",
-        "env": "wifi_s3",
-        "flash": "8 MB",
-        "psram": "Quad",
-        "oled": "No",
-        "usb": "No",
-    },
-    {
-        "label": "octal",
-        "env": "wifi_s3_octalPSRAM",
-        "flash": "8 MB",
-        "psram": "Octal",
-        "oled": "No",
-        "usb": "No",
-    },
-    {
-        "label": "quad-oled-usb",
+        "label": "wifi-8mb-quad",
         "env": "wifi_s3_oled_usb",
         "flash": "8 MB",
         "psram": "Quad",
@@ -78,7 +45,7 @@ VARIANTS = [
         "usb": "Yes",
     },
     {
-        "label": "octal-oled-usb",
+        "label": "wifi-8mb-octal",
         "env": "wifi_s3_octalPSRAM_oled_usb",
         "flash": "8 MB",
         "psram": "Octal",
@@ -86,7 +53,7 @@ VARIANTS = [
         "usb": "Yes",
     },
     {
-        "label": "octal-oled-usb-16mb",
+        "label": "wifi-16mb-octal",
         "env": "wifi_s3_octalPSRAM_oled_usb_16mb",
         "flash": "16 MB",
         "psram": "Octal",
@@ -94,7 +61,7 @@ VARIANTS = [
         "usb": "Yes",
     },
     {
-        "label": "quad-oled-usb-4mb",
+        "label": "wifi-4mb-quad",
         "env": "wifi_s3_oled_usb_4mb",
         "flash": "4 MB",
         "psram": "Quad",
@@ -102,7 +69,7 @@ VARIANTS = [
         "usb": "Yes",
     },
     {
-        "label": "octal-oled-usb-4mb",
+        "label": "wifi-4mb-octal",
         "env": "wifi_s3_octalPSRAM_oled_usb_4mb",
         "flash": "4 MB",
         "psram": "Octal",
@@ -110,15 +77,62 @@ VARIANTS = [
         "usb": "Yes",
     },
     {
-        "label": "nopsram-oled-usb-4mb",
+        "label": "wifi-4mb-nopsram",
         "env": "wifi_s3_oled_usb_4mb_nopsram",
         "flash": "4 MB",
         "psram": "None",
         "oled": "Yes",
         "usb": "Yes",
     },
+    {
+        "label": "nowifi-8mb-quad",
+        "env": "noradio_s3_oled_usb",
+        "flash": "8 MB",
+        "psram": "Quad",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
+    {
+        "label": "nowifi-8mb-octal",
+        "env": "noradio_s3_octalPSRAM_oled_usb",
+        "flash": "8 MB",
+        "psram": "Octal",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
+    {
+        "label": "nowifi-16mb-octal",
+        "env": "noradio_s3_octalPSRAM_oled_usb_16mb",
+        "flash": "16 MB",
+        "psram": "Octal",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
+    {
+        "label": "nowifi-4mb-quad",
+        "env": "noradio_s3_oled_usb_4mb",
+        "flash": "4 MB",
+        "psram": "Quad",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
+    {
+        "label": "nowifi-4mb-octal",
+        "env": "noradio_s3_octalPSRAM_oled_usb_4mb",
+        "flash": "4 MB",
+        "psram": "Octal",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
+    {
+        "label": "nowifi-4mb-nopsram",
+        "env": "noradio_s3_oled_usb_4mb_nopsram",
+        "flash": "4 MB",
+        "psram": "None",
+        "oled": "Yes",
+        "usb": "Yes",
+    },
 ]
-
 BUILD_FILES = (
     "firmware.bin",
     "firmware.factory.bin",
@@ -281,13 +295,21 @@ def stage_variant(
     write_text(usb / "manifest.json", json.dumps(usb_manifest, ensure_ascii=False, indent=2) + "\n")
 
     no_ota = variant["flash"] == "4 MB"
-    ota_note = (
-        "此 4 MB 变体只有单个 app 分区，不能做网络 OTA。\n"
-        "应用更新请用串口写 OTA/firmware.bin 到 0x10000（保留配置）；\n"
-        "USB/factory 仅用于完整重装，不要用它代替普通升级。"
-        if no_ota
-        else "使用 firmware.bin（0x10000）做应用区 OTA；不要用 factory image 覆盖 bootloader/partitions。"
-    )
+    no_wifi = label.startswith("nowifi-")
+    if no_ota:
+        ota_note = (
+            "此 4 MB 变体只有单个 app 分区，不能做网络 OTA。\n"
+            "应用更新请用串口写 OTA/firmware.bin 到 0x10000（保留配置）；\n"
+            "USB/factory 仅用于完整重装，不要用它代替普通升级。"
+        )
+    elif no_wifi:
+        ota_note = (
+            "此 NoWiFi 变体没有网络栈，不能做网络 OTA。\n"
+            "应用更新请通过 USB / Web Serial 或串口写 OTA/firmware.bin 到 0x10000（保留配置）；\n"
+            "USB/factory 仅用于完整重装。"
+        )
+    else:
+        ota_note = "使用 firmware.bin（0x10000）做应用区 OTA；不要用 factory image 覆盖 bootloader/partitions。"
     write_text(
         ota / "README.txt",
         f"""FluidCAN {tag} - {label}
@@ -336,7 +358,6 @@ Flash：{variant['flash']}
 PSRAM：{variant['psram']}
 OLED：{variant['oled']}
 USB：{variant['usb']}
-默认变体：{'yes' if variant.get('default') else 'no'}
 
 目录：
   OTA/  应用区升级
