@@ -44,7 +44,30 @@ namespace MotorDrivers {
         Assert(config != nullptr && config->_can != nullptr, "zdt motor driver requires a can: section");
         Assert(config->_can->configured(), "zdt motor driver requires can: tx_pin and rx_pin");
         Assert(_address >= 1 && _address <= Machine::CanBus::MAX_CLIENTS, "zdt address must be 1..MAX_CLIENTS");
-        Assert(_countsPerRev > 0, "zdt counts_per_rev must be positive");
+
+        auto axisConfig = Axes::_axis[axis_index()];
+        if (_countsPerRev == 0) {
+            // New human-readable configuration: derive the driver's step count
+            // from the mechanical declaration instead of asking the user to
+            // compute it.  Derivation is only defined for one driver unit per
+            // FluidNC step; a different counts_per_step would silently scale
+            // the position stream.
+            Assert(axisConfig->_fullStepsPerRev > 0 && axisConfig->_microsteps > 0,
+                   "zdt counts_per_rev omitted but axis full_steps_per_rev/microsteps are not both set");
+            Assert(_countsPerStep == 1.0f,
+                   "zdt counts_per_rev is derived from microsteps only when counts_per_step is 1.0");
+            _countsPerRev = int32_t(axisConfig->_fullStepsPerRev) * int32_t(axisConfig->_microsteps);
+            log_info("ZDT CAN: address " << int(_address) << " derived counts_per_rev " << _countsPerRev << " from "
+                                         << axisConfig->_fullStepsPerRev << " full steps x " << axisConfig->_microsteps
+                                         << " microsteps");
+        } else if (axisConfig->_fullStepsPerRev > 0 && axisConfig->_microsteps > 0) {
+            const int32_t derived = int32_t(axisConfig->_fullStepsPerRev) * int32_t(axisConfig->_microsteps);
+            Assert(_countsPerRev == derived,
+                   "zdt counts_per_rev conflicts with axis full_steps_per_rev*microsteps; remove one or make them equal");
+            Assert(_countsPerStep == 1.0f,
+                   "zdt counts_per_step must be 1.0 when axis mechanics supply counts_per_rev");
+        }
+        Assert(_countsPerRev > 0 && _countsPerRev <= 1000000, "zdt counts_per_rev must be 1..1000000");
         Assert(_countsPerStep > 0.0f, "zdt counts_per_step must be positive");
         Assert(_speedRpm >= 1 && _speedRpm <= 3000, "zdt speed_rpm must be 1..3000 for the X42S free protocol");
         Assert(_speedMarginPct >= 0 && _speedMarginPct <= 100, "zdt speed_margin_pct must be 0..100");
@@ -78,21 +101,30 @@ namespace MotorDrivers {
         } else {
             Assert(_accel >= 1, "zdt X accel is RPM/s and must be at least 1");
         }
+        // The streamed target must be able to cover the axis's configured
+        // maximum feed.  This applies to fixed speed too: fixed does not mean
+        // "any speed is safe" - a too-small RPM leaves an invisible following
+        // error because ZDT streaming is open-loop with respect to position.
+        const double requiredRpm = double(axisConfig->_maxRate) * double(axisConfig->_stepsPerMm) * double(_countsPerStep) /
+                                   double(_countsPerRev);
         if (_plannerSpeed) {
-            // The streamed following speed must be able to cover the axis's
-            // configured maximum feed.  Otherwise the target stream would
-            // outrun the drive and leave an invisible following error.
             Assert(_firmware == ZdtFirmware::Emm, "zdt speed_source=planner currently requires firmware Emm");
-            auto   axisConfig  = Axes::_axis[axis_index()];
-            double requiredRpm = double(axisConfig->_maxRate) * double(axisConfig->_stepsPerMm) * double(_countsPerStep) /
-                               double(_countsPerRev);
             // The margin is applied before the speed_rpm clamp, so speed_rpm
             // must cover the margin too; otherwise the configured catch-up
             // headroom would silently disappear at maximum feed.
-            double requiredWithMargin = requiredRpm * (100.0 + double(_speedMarginPct)) / 100.0;
-            int    required           = int(std::ceil(requiredWithMargin));
+            const double requiredWithMargin = requiredRpm * (100.0 + double(_speedMarginPct)) / 100.0;
+            Assert(requiredWithMargin <= 3000.0,
+                   "zdt axis maximum feed plus speed_margin_pct needs >3000 RPM; lower max speed/accel or margin");
+            // Tiny epsilon avoids a float-derived 100.0000001 becoming 101.
+            const int required = int(std::ceil(requiredWithMargin - 1e-9));
             Assert(_speedRpm >= required,
                    "zdt speed_rpm is below the axis maximum feed plus speed_margin_pct for speed_source=planner");
+        } else {
+            Assert(requiredRpm <= 3000.0,
+                   "zdt axis maximum feed needs >3000 RPM; lower max speed or use a larger distance_per_rev");
+            const int required = int(std::ceil(requiredRpm - 1e-9));
+            Assert(_speedRpm >= required,
+                   "zdt speed_rpm is below the axis maximum feed (fixed speed stream would lag); raise speed_rpm");
         }
 
         if (string_util::equal_ignore_case(_checksumName, "XOR")) {

@@ -17,6 +17,49 @@ namespace Machine {
         // include the microstep multiplier.
         handler.item("steps_per_mm", _stepsPerMm, 0.001, 100000.0);
 
+        // @config full_steps_per_rev
+        // @default 0
+        // @tuning per-machine
+        // Optional human-readable motor mechanics: full steps per revolution
+        // (200 for a 1.8 degree motor, 400 for 0.9 degree).  When this,
+        // microsteps and distance_per_rev are all supplied, the firmware
+        // derives steps_per_mm; steps_per_mm is then optional.
+        handler.item("full_steps_per_rev", _fullStepsPerRev, 0, 10000);
+
+        // @config microsteps
+        // @default 0
+        // @tuning per-machine
+        // Optional driver microstep setting.  This is the value the physical
+        // driver is configured for; FluidNC uses it to derive step resolution.
+        handler.item("microsteps", _microsteps, 0, 256);
+
+        // @config distance_per_rev
+        // @default 0
+        // @tuning per-machine
+        // Optional mechanical travel per motor revolution: mm for linear axes,
+        // degrees for rotary axes (rotary defaults to 360 when omitted).
+        handler.item("distance_per_rev", _distancePerRev, 0, 1000000.0);
+
+        // @config max_speed_mm_per_min
+        // @default 0
+        // @tuning per-machine
+        // Human name for a linear axis's maximum speed.  Overrides the legacy
+        // max_rate_mm_per_min when supplied.
+        handler.item("max_speed_mm_per_min", _maxSpeedLinear, 0, 250000.0);
+
+        // @config max_speed_deg_per_min
+        // @default 0
+        // @tuning per-machine
+        // Human name for a rotary axis's maximum speed, in degrees/minute.
+        handler.item("max_speed_deg_per_min", _maxSpeedRotary, 0, 250000.0);
+
+        // @config acceleration_deg_per_sec2
+        // @default 0
+        // @tuning per-machine
+        // Human acceleration for a rotary axis, in degrees/sec^2.  Linear axes
+        // use the existing acceleration_mm_per_sec2 field.
+        handler.item("acceleration_deg_per_sec2", _accelRotary, 0, 100000.0);
+
         // @config max_rate_mm_per_min
         // @default 1000.0
         // @tuning per-machine
@@ -92,6 +135,62 @@ namespace Machine {
     void Axis::afterParse() {
         if (_motors[0] == nullptr) {
             _motors[0] = new Machine::Motor(_axis, 0);
+        }
+
+        if (is_linear(_axis)) {
+            if (_maxSpeedLinear > 0.0f) {
+                _maxRate = _maxSpeedLinear;
+            }
+        } else {
+            if (_maxSpeedRotary > 0.0f) {
+                _maxRate = _maxSpeedRotary;
+            }
+            if (_accelRotary > 0.0f) {
+                _acceleration = _accelRotary;
+            }
+        }
+
+        // Human-readable mechanics win over the raw steps_per_mm when complete.
+        // A rotary axis may omit distance_per_rev (defaults to 360 degrees).
+        const bool anyMechanics = _fullStepsPerRev || _microsteps || _distancePerRev > 0.0f;
+        const bool allMechanics = _fullStepsPerRev && _microsteps && (_distancePerRev > 0.0f || !is_linear(_axis));
+        if (allMechanics) {
+            const float distance = _distancePerRev > 0.0f ? _distancePerRev : 360.0f;
+            _stepsPerMm          = float(_fullStepsPerRev) * float(_microsteps) / distance;
+            if (_distancePerRev == 0.0f) {
+                _distancePerRev = 360.0f;
+            }
+            log_info("Axis " << Axes::axisName(_axis) << " derived steps_per_mm " << _stepsPerMm << " from "
+                             << _fullStepsPerRev << " full steps x " << _microsteps << " microsteps / " << distance
+                             << " per rev");
+        } else if (anyMechanics) {
+            log_config_error("Axis " << Axes::axisName(_axis)
+                                     << " human mechanics fields are incomplete; supply all of full_steps_per_rev, "
+                                        "microsteps and (for linear axes) distance_per_rev");
+        }
+    }
+
+    void Axis::validate() {
+        const bool anyMechanics = _fullStepsPerRev || _microsteps || _distancePerRev > 0.0f;
+        const bool allMechanics = _fullStepsPerRev && _microsteps && (_distancePerRev > 0.0f || !is_linear(_axis));
+        Assert(!anyMechanics || allMechanics,
+               "axis mechanics fields are incomplete; steps_per_mm cannot be derived");
+        if (allMechanics || _fullStepsPerRev || _microsteps) {
+            Assert(_fullStepsPerRev > 0 && _microsteps > 0,
+                   "full_steps_per_rev and microsteps must both be positive when supplied");
+            Assert(!is_linear(_axis) || _distancePerRev > 0.0f,
+                   "distance_per_rev must be positive for a linear axis when using human mechanics fields");
+        }
+        if (allMechanics) {
+            Assert(_stepsPerMm >= 0.001f && _stepsPerMm <= 100000.0f,
+                   "derived steps_per_mm is outside the supported range");
+        }
+        if (is_linear(_axis)) {
+            Assert(_maxSpeedRotary == 0.0f && _accelRotary == 0.0f,
+                   "rotary max_speed_deg_per_min/acceleration_deg_per_sec2 used on a linear axis");
+        } else {
+            Assert(_maxSpeedLinear == 0.0f,
+                   "max_speed_mm_per_min used on a rotary axis; use max_speed_deg_per_min");
         }
     }
 

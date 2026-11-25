@@ -83,6 +83,15 @@ namespace MotorDrivers {
         return finish(out, 2, checksumMode);
     }
 
+    size_t ZdtProtocol::build_read_version(uint8_t address, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
+        if (capacity < 3) {
+            return 0;
+        }
+        out[0] = address;
+        out[1] = 0x1F;
+        return finish(out, 2, checksumMode);
+    }
+
     size_t ZdtProtocol::build_enable(uint8_t address, bool enable, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
         if (capacity < 6) {
             return 0;
@@ -227,6 +236,20 @@ namespace MotorDrivers {
         // 0x02 = command accepted; 0x9F = motion/zero completed.  Some
         // Response modes (Reached/Both) return 9F for position commands.
         return data[1] == 0x02 || data[1] == 0x9F;
+    }
+
+    bool ZdtProtocol::parse_version(const uint8_t* data, size_t len, VersionInfo& out) {
+        // Serial: Addr 1F FW_Ver(2) HW_Series/HW_Type/HW_Ver(2) 6B
+        // CAN data:      1F FW_Ver(2) HW_Series/HW_Type/HW_Ver(2) 6B
+        if (!data || len != 6 || data[0] != 0x1F || data[5] != 0x6B) {
+            return false;
+        }
+        out.firmware        = uint16_t((uint16_t(data[1]) << 8) | data[2]);
+        const uint16_t packed = uint16_t((uint16_t(data[3]) << 8) | data[4]);
+        out.hardwareSeries  = uint8_t((packed >> 12) & 0x0F);
+        out.hardwareType    = uint8_t((packed >> 8) & 0x0F);
+        out.hardwareVersion = uint8_t(packed & 0xFF);
+        return true;
     }
 
     bool ZdtProtocol::parse_position(ZdtFirmware firmware,

@@ -40,6 +40,7 @@ namespace MotorDrivers {
         static constexpr size_t MAX_MESSAGE = 32;
 
         static size_t build_read_position(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
+        static size_t build_read_version(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
         static size_t build_enable(uint8_t address, bool enable, ZdtChecksum checksum, uint8_t* out, size_t capacity);
         static size_t build_stop(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
         static size_t build_zero(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
@@ -73,6 +74,18 @@ namespace MotorDrivers {
                                              uint8_t  margin_percent = 0);
 
         static bool parse_ack(const uint8_t* data, size_t len, uint8_t function);
+
+        struct VersionInfo {
+            uint16_t firmware = 0;
+            uint8_t  hardwareSeries = 0;
+            uint8_t  hardwareType = 0;
+            uint8_t  hardwareVersion = 0;
+        };
+
+        // Decode the 0x1F response (CAN data begins with the function code).
+        // firmware=0x00CF is V2.0.7, hardware type 1/3/... is 28/42/...
+        static bool parse_version(const uint8_t* data, size_t len, VersionInfo& out);
+
         static bool parse_position(ZdtFirmware    firmware,
                                    const uint8_t* data,
                                    size_t         len,

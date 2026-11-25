@@ -52,11 +52,11 @@ namespace MotorDrivers {
             handler.item("checksum", _checksumName, 2, 3);
 
             // @config counts_per_rev
-            // @default 3200
+            // @default 0
             // @tuning per-machine
-            // Driver position units per motor revolution.  3200 is the factory
-            // 16-microstep value for a 1.8 degree motor.
-            handler.item("counts_per_rev", _countsPerRev, 1, 1000000);
+            // Driver position units per motor revolution.  Omit (0) to derive it
+            // from the axis human mechanics (full_steps_per_rev x microsteps).
+            handler.item("counts_per_rev", _countsPerRev, 0, 1000000);
 
             // @config counts_per_step
             // @default 1.0
@@ -171,7 +171,7 @@ namespace MotorDrivers {
         std::string _modeName        = "position_stream";
         std::string _positionModeName = "relative_previous";
         std::string _speedSourceName = "fixed";
-        int32_t  _countsPerRev = 3200;
+        int32_t  _countsPerRev = 0;  // 0 = derive from axis mechanics
         float    _countsPerStep = 1.0f;
         int32_t  _speedRpm     = 600;
         int32_t  _speedMarginPct = 25;

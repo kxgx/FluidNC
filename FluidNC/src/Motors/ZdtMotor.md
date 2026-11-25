@@ -34,12 +34,41 @@ silently changing the position contract.
 0.1 RPM.  `checksum` must match the drive setting.  `counts_per_rev` and
 `counts_per_step` must match the drive microstep/encoder scaling.
 
+### Human-readable mechanics (preferred)
+
+The axis can declare the mechanics and let the firmware derive both the axis
+resolution and this driver's step count:
+
+```yaml
+axes:
+  x:
+    full_steps_per_rev: 200   # 1.8 degree motor
+    microsteps: 16
+    distance_per_rev: 40      # mm per motor revolution
+    max_speed_mm_per_min: 3000
+  a:
+    full_steps_per_rev: 200
+    microsteps: 16            # distance defaults to 360 degrees
+    max_speed_deg_per_min: 600
+```
+
+`counts_per_rev` may be omitted (or set to 0); the driver derives
+`full_steps_per_rev * microsteps`.  `steps_per_mm` is also omitted and derived
+by the Axis.  This does not write the drive's MStep: `microsteps` must match the
+drive setting.  For `Emm`, it also determines the pulse units; for `X` the
+position command is already in 0.1 degree, so the value is only the FluidNC
+step mapping.
+
 ## Speed sources
 
 ### `fixed` (default, historical bytes)
 
 The `speed_rpm` value is sent unchanged on every position command.  This is
 the existing smooth streaming behavior and is the default for compatibility.
+Validation requires `speed_rpm` to cover the axis maximum feed even in fixed
+mode: too small a value leaves an invisible following error because the
+position stream is not corrected by encoder readback.  The required value is
+`ceil(max_rate * steps_per_mm * counts_per_step / counts_per_rev)`.
 
 ### `planner` (experimental, Emm only)
 

@@ -216,7 +216,60 @@ namespace Machine {
     }
 
     void ZdtCanDriver::report_driver_configs() {
-        log_info("ZDT CAN: configuration report is not implemented");
+        if (!_bus || !_bus->ready()) {
+            log_info("ZDT CAN: firmware report skipped; bus is not ready");
+            return;
+        }
+        uint8_t addresses[CanBus::MAX_CLIENTS];
+        const size_t count = _bus->client_addresses(addresses, CanBus::MAX_CLIENTS);
+        if (!count) {
+            log_info("ZDT CAN: firmware report skipped; no clients configured");
+            return;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            const uint8_t address = addresses[i];
+            uint8_t       request[8];
+            const size_t  length = ZdtProtocol::build_read_version(address, ZdtChecksum::Fixed6B, request, sizeof(request));
+            if (!length) {
+                log_info("ZDT CAN: address " << int(address) << " firmware report request build failed");
+                continue;
+            }
+            uint8_t response[16];
+            size_t  responseLen = 0;
+            uint32_t responseId = 0;
+            bool     responseExtended = false;
+            {
+                CanBus::Lock lock(*_bus);
+                _bus->flush_receive();
+                if (!_bus->send_chunked(uint32_t(address) << 8, request + 1, length - 1, TRANSACTION_TIMEOUT_MS)) {
+                    log_info("ZDT CAN: address " << int(address) << " firmware report send failed");
+                    continue;
+                }
+                responseLen = _bus->receive_frame(responseId, responseExtended, response, sizeof(response), TRANSACTION_TIMEOUT_MS);
+            }
+            // A multi-drop bus can deliver a late frame from another node; do
+            // not attribute it to this address.  ZDT uses extended IDs with the
+            // address in bits 15..8 and the packet code in bits 7..0.
+            if (!responseExtended || (responseId >> 8) != address) {
+                log_info("ZDT CAN: address " << int(address) << " firmware report no matching response");
+                continue;
+            }
+            ZdtProtocol::VersionInfo version;
+            if (!ZdtProtocol::parse_version(response, responseLen, version)) {
+                log_info("ZDT CAN: address " << int(address) << " firmware report malformed response");
+                continue;
+            }
+            const int major = int(version.firmware) / 100;
+            const int minor = (int(version.firmware) / 10) % 10;
+            const int patch = int(version.firmware) % 10;
+            // Protocol-neutral report contract consumed by Studio and other
+            // tooling.  Keep the field names stable across CAN drivers; a
+            // driver that cannot report a field can omit that key/value pair.
+            log_info("CAN driver: address " << int(address) << " protocol zdt firmware " << major << "." << minor << "." << patch
+                                            << " firmware-raw " << int(version.firmware) << " hardware-series "
+                                            << int(version.hardwareSeries) << " hardware-type " << int(version.hardwareType)
+                                            << " hardware-version " << int(version.hardwareVersion));
+        }
     }
 
     bool ZdtCanDriver::suspend() {

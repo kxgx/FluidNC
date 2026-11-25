@@ -959,6 +959,60 @@ axes.<letter>:
     description: |
       Controller-side step-pulse resolution for this axis -- really "steps per GCode unit," despite the name: in G21 (mm) mode, a one-unit move issues this many step pulses; for a linear (XYZ) axis in G20 (inches) mode, the step count is instead multiplied by 25.4. A rotary (ABC) axis always issues this many pulses per unit, regardless of G20/G21. If using a microstepping driver, this already needs to include the microstep multiplier.
 
+  full_steps_per_rev:
+    type: integer
+    min: 0
+    max: 10000
+    default: '0'
+    tuning: per-machine
+    description: |
+      Optional human-readable motor mechanics: full steps per revolution (200 for a 1.8 degree motor, 400 for 0.9 degree).  When this, microsteps and distance_per_rev are all supplied, the firmware derives steps_per_mm; steps_per_mm is then optional.
+
+  microsteps:
+    type: integer
+    min: 0
+    max: 256
+    default: '0'
+    tuning: per-machine
+    description: |
+      Optional driver microstep setting.  This is the value the physical driver is configured for; FluidNC uses it to derive step resolution.
+
+  distance_per_rev:
+    type: float
+    min: 0
+    max: 1000000.0
+    default: '0'
+    tuning: per-machine
+    description: |
+      Optional mechanical travel per motor revolution: mm for linear axes, degrees for rotary axes (rotary defaults to 360 when omitted).
+
+  max_speed_mm_per_min:
+    type: float
+    min: 0
+    max: 250000.0
+    default: '0'
+    tuning: per-machine
+    description: |
+      Human name for a linear axis's maximum speed.  Overrides the legacy max_rate_mm_per_min when supplied.
+
+  max_speed_deg_per_min:
+    type: float
+    min: 0
+    max: 250000.0
+    default: '0'
+    tuning: per-machine
+    description: |
+      Human name for a rotary axis's maximum speed, in degrees/minute.
+
+  acceleration_deg_per_sec2:
+    type: float
+    min: 0
+    max: 100000.0
+    default: '0'
+    tuning: per-machine
+    description: |
+      Human acceleration for a rotary axis, in degrees/sec^2.  Linear axes use the existing acceleration_mm_per_sec2 field.
+
   max_rate_mm_per_min:
     type: float
     min: 0.001
@@ -2481,12 +2535,12 @@ axes.<letter>.motorN.zdt:
 
   counts_per_rev:
     type: integer
-    min: 1
+    min: 0
     max: 1000000
-    default: '3200'
+    default: '0'
     tuning: per-machine
     description: |
-      Driver position units per motor revolution.  3200 is the factory 16-microstep value for a 1.8 degree motor.
+      Driver position units per motor revolution.  Omit (0) to derive it from the axis human mechanics (full_steps_per_rev x microsteps).
 
   counts_per_step:
     type: float

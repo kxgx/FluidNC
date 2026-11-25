@@ -34,6 +34,21 @@ namespace Machine {
         float _maxRate      = 1000.0f;
         float _acceleration = 25.0f;
         float _maxTravel    = 1000.0f;
+
+        // Optional human-readable mechanics.  When all three are supplied the
+        // firmware derives steps_per_mm/deg, so users do not hand-compute the
+        // controller's step resolution.  distance_per_rev is mm for linear
+        // axes and degrees for rotary axes (default 360 for rotary).
+        int32_t _fullStepsPerRev = 0;  // 200 for 1.8deg, 400 for 0.9deg
+        int32_t _microsteps      = 0;  // 0 means "not specified"
+        float   _distancePerRev  = 0;  // 0 means "not specified"
+
+        // Human speed/acceleration names.  The legacy max_rate_mm_per_min /
+        // acceleration_mm_per_sec2 remain accepted; for a rotary axis these
+        // human fields use degrees.
+        float _maxSpeedLinear = 0;
+        float _maxSpeedRotary = 0;
+        float _accelRotary    = 0;
         bool  _softLimits   = false;
         bool  _idleDisable  = true;
 
@@ -48,6 +63,7 @@ namespace Machine {
         // Configuration system helpers:
         void group(Configuration::HandlerBase& handler) override;
         void afterParse() override;
+        void validate() override;
 
         // Checks if a motor matches this axis:
         bool hasMotor(const MotorDrivers::MotorDriver* const driver) const;

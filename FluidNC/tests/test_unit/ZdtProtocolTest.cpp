@@ -109,6 +109,30 @@ TEST(ZdtProtocol, RejectsUnsupportedPositionMode) {
               0u);
 }
 
+TEST(ZdtProtocol, BuildsReadVersion) {
+    uint8_t frame[8] = {};
+    size_t  len      = ZdtProtocol::build_read_version(6, ZdtChecksum::Fixed6B, frame, sizeof(frame));
+    ASSERT_EQ(len, 3u);
+    EXPECT_EQ(frame[0], 6);
+    EXPECT_EQ(frame[1], 0x1F);
+    EXPECT_EQ(frame[2], 0x6B);
+}
+
+TEST(ZdtProtocol, ParsesVersion) {
+    // ID6 observed: FW 0x00CF (2.0.7), hardware 0x2114 (series 2, type 28, V2.0).
+    const uint8_t frame[] = { 0x1F, 0x00, 0xCF, 0x21, 0x14, 0x6B };
+    ZdtProtocol::VersionInfo info;
+    ASSERT_TRUE(ZdtProtocol::parse_version(frame, sizeof(frame), info));
+    EXPECT_EQ(info.firmware, 0x00CF);
+    EXPECT_EQ(info.hardwareSeries, 2);
+    EXPECT_EQ(info.hardwareType, 1);
+    EXPECT_EQ(info.hardwareVersion, 20);
+
+    ASSERT_FALSE(ZdtProtocol::parse_version(frame, 5, info));
+    const uint8_t wrong[] = { 0x36, 0x00, 0xCF, 0x21, 0x14, 0x6B };
+    ASSERT_FALSE(ZdtProtocol::parse_version(wrong, sizeof(wrong), info));
+}
+
 TEST(ZdtProtocol, ChecksumModes) {
     const uint8_t data[] = { 0x01, 0x06, 0x45 };
     EXPECT_EQ(ZdtProtocol::checksum(data, sizeof(data), ZdtChecksum::Fixed6B), 0x6B);
