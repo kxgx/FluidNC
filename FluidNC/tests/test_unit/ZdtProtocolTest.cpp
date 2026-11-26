@@ -25,6 +25,8 @@ TEST(ZdtProtocol, SplitsFramesLikeVendorCanExample) {
     ZdtProtocol::Frame frames[4] = {};
     const size_t count = ZdtProtocol::build_frames(1, logical + 1, sizeof(logical) - 1, frames, 4);
     ASSERT_EQ(count, 2u);
+    EXPECT_TRUE(frames[0].extended);
+    EXPECT_TRUE(frames[1].extended);
     EXPECT_EQ(frames[0].id, 0x0100u);
     EXPECT_EQ(frames[0].length, 8u);
     const uint8_t first[] = { 0xFD, 0x01, 0x0F, 0xA0, 0x00, 0x00, 0x01, 0xFA };

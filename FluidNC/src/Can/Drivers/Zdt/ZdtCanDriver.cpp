@@ -41,12 +41,7 @@ namespace Machine {
         if (!count) {
             return false;
         }
-        for (size_t i = 0; i < count; ++i) {
-            if (!_bus->send_frame(frames[i].id, true, frames[i].data, frames[i].length, timeout_ms)) {
-                return false;
-            }
-        }
-        return true;
+        return _bus->send_frames(frames, count, timeout_ms);
     }
 
     bool ZdtCanDriver::transact(

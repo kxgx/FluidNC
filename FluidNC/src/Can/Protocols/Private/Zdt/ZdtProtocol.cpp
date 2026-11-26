@@ -98,6 +98,7 @@ namespace MotorDrivers {
             const size_t chunk = std::min(FRAME_PAYLOAD, payloadLen - offset);
             Frame&       frame = out[packet];
             frame.id           = (uint32_t(address) << 8) | uint32_t(packet);
+            frame.extended     = true;
             frame.length       = uint8_t(chunk + 1);
             frame.data[0]      = function;
             if (chunk) {

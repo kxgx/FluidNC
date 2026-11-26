@@ -54,6 +54,8 @@
 
 #if MAX_N_CAN
 
+#    include "Can/CanFrame.h"
+
 #    include <cstddef>
 #    include <cstdint>
 
@@ -85,17 +87,12 @@ namespace MotorDrivers {
         // packet carries at most 8 bytes; these limits cover split commands.
         static constexpr size_t MAX_MESSAGE  = 32;
         static constexpr size_t MAX_RESPONSE = 16;
-        static constexpr size_t FRAME_DATA_MAX = 8;  // CAN 2.0 data bytes
         static constexpr size_t FRAME_PAYLOAD  = 7;  // function byte + 7 payload
 
-        // One physical CAN frame produced from a logical ZDT command.  The
-        // protocol layer owns packet numbering and repeated function codes; the
-        // transport only sends raw frames.
-        struct Frame {
-            uint32_t id     = 0;
-            uint8_t  length = 0;
-            uint8_t  data[FRAME_DATA_MAX] = {};
-        };
+        // A physical frame produced from a logical ZDT command.  CanFrame is the
+        // shared transport value type; the protocol owns packet numbering and
+        // repeated function codes, CanBus only sends raw frames.
+        using Frame = CanFrame;
 
         // ====================================================================
         // 2. Function codes

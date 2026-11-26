@@ -27,6 +27,7 @@
 
 #    include "Configuration/Configurable.h"
 #    include "CanDriver.h"
+#    include "CanFrame.h"
 #    include "Pin.h"
 
 #    include <atomic>
@@ -195,7 +196,7 @@ namespace Machine {
         // logical-message helpers below -- and standard protocols such as
         // CANopen/CiA301, which use 11-bit frames -- are built on.  It sends
         // exactly one frame, so len may not exceed 8 bytes.  It does not apply
-        // the inter-message gap; use send_message() when a
+        // the inter-message gap; use send_message()/send_frames() when a
         // vendor protocol requires pacing between complete messages.
         bool send_frame(uint32_t id, bool extended, const uint8_t* data, size_t len, uint32_t timeout_ms);
 
@@ -207,6 +208,13 @@ namespace Machine {
         // frame.  Callers must hold the Lock so that the pace is tracked
         // consistently.
         bool send_message(uint32_t can_id, const uint8_t* data, size_t len, uint32_t timeout_ms);
+
+        // Sends a pre-built sequence of frames as one logical message.  This is
+        // for protocols whose framing is owned by a protocol codec (for example
+        // ZDT split frames): the codec fills CanFrame values, the transport only
+        // applies the inter-message gap and transmits them in order.  Callers
+        // must hold the Lock so the gap accounting is consistent.
+        bool send_frames(const CanFrame* frames, size_t count, uint32_t timeout_ms);
 
         // Waits for the next CAN data frame, copies its payload into buf and
         // reports the identifier and frame format (extended=false is an 11-bit

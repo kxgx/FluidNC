@@ -581,6 +581,28 @@ namespace Machine {
         return ok;
     }
 
+    bool CanBus::send_frames(const CanFrame* frames, size_t count, uint32_t timeout_ms) {
+        if (!_ready || !frames || !count) {
+            return false;
+        }
+        if (_min_message_gap_ms && _message_sent) {
+            uint32_t elapsed = now_ms() - _last_message_end_ms;
+            if (elapsed < _min_message_gap_ms) {
+                vTaskDelay(pdMS_TO_TICKS(_min_message_gap_ms - elapsed));
+            }
+        }
+        bool ok = true;
+        for (size_t i = 0; i < count; ++i) {
+            if (!send_frame(frames[i].id, frames[i].extended, frames[i].data, frames[i].length, timeout_ms)) {
+                ok = false;
+                break;
+            }
+        }
+        _last_message_end_ms = now_ms();
+        _message_sent        = true;
+        return ok;
+    }
+
     size_t CanBus::receive_frame(uint32_t& id, bool& extended, uint8_t* buf, size_t max_len, uint32_t timeout_ms) {
         id       = 0;
         extended = false;

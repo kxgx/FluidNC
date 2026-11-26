@@ -218,10 +218,8 @@ namespace MotorDrivers {
         if (!count) {
             return false;
         }
-        for (size_t i = 0; i < count; ++i) {
-            if (!_bus->send_frame(frames[i].id, true, frames[i].data, frames[i].length, TRANSACTION_TIMEOUT_MS)) {
-                return false;
-            }
+        if (!_bus->send_frames(frames, count, TRANSACTION_TIMEOUT_MS)) {
+            return false;
         }
         // The relative move has already left the controller.  Record that fact
         // separately from the acknowledgement: a missing ACK must not cause the
