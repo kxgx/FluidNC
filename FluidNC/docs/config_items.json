@@ -598,7 +598,7 @@
    "type": "boolean",
    "default": "false",
    "tuning": "typical",
-   "description": "Briefly show red/green on both strips at boot.\n"
+   "description": "Run the stock top-then-bottom red/green/blue startup test (1.5 s each).\n"
   },
   "i2c_bus": {
    "type": "integer",

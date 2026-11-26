@@ -100,14 +100,29 @@ namespace Machine {
         }
 
         if (_startupTest) {
-            if (_top.ready()) {
-                _top.setColor(64, 0, 0);
-                _top.show();
-            }
-            if (_bottom.ready()) {
-                _bottom.setColor(0, 64, 0);
-                _bottom.show();
-            }
+            // Match the stock LumenPnP Marlin startup test
+            // (NEOPIXEL_STARTUP_TEST then NEOPIXEL2_STARTUP_TEST): each ready
+            // strip runs red, green, blue for 500 ms each and then turns off.
+            // The stock firmware initializes the two strips sequentially, so
+            // two configured strips take 3 s total.
+            auto runStrip = [](WS2812Strip& strip) {
+                if (!strip.ready()) {
+                    return;
+                }
+                strip.setColor(255, 0, 0);
+                strip.show();
+                delay(500);
+                strip.setColor(0, 255, 0);
+                strip.show();
+                delay(500);
+                strip.setColor(0, 0, 255);
+                strip.show();
+                delay(500);
+                strip.setColor(0, 0, 0);
+                strip.show();
+            };
+            runStrip(_top);
+            runStrip(_bottom);
         }
     }
 
@@ -559,7 +574,7 @@ namespace Machine {
         // @config startup_test
         // @default false
         // @tuning typical
-        // Briefly show red/green on both strips at boot.
+        // Run the stock top-then-bottom red/green/blue startup test (1.5 s each).
         handler.item("startup_test", _startupTest);
 #if MAX_N_I2C
         // @config i2c_bus
