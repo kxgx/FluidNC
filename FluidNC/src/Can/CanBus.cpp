@@ -603,6 +603,21 @@ namespace Machine {
         return ok;
     }
 
+    bool CanBus::wait_for_all_clients_synced(uint32_t timeout_ms) {
+        const uint32_t started = now_ms();
+        while (!all_clients_synced()) {
+            if (stop_latched() || inhibited() || !_ready) {
+                return false;
+            }
+            if (uint32_t(now_ms() - started) >= timeout_ms) {
+                can_log_error("CAN: clients did not re-sync within " << timeout_ms << " ms");
+                return false;
+            }
+            vTaskDelay(pdMS_TO_TICKS(10));
+        }
+        return true;
+    }
+
     size_t CanBus::receive_frame(uint32_t& id, bool& extended, uint8_t* buf, size_t max_len, uint32_t timeout_ms) {
         id       = 0;
         extended = false;

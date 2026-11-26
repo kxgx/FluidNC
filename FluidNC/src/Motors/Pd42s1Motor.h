@@ -246,6 +246,7 @@ namespace MotorDrivers {
         volatile bool     _disableRequested  = false;
         volatile bool     _disablePending    = false;
         volatile uint32_t _disableGeneration = 0;
+    volatile uint32_t _positionGeneration = 0;
 
         // CAN task state
         bool     _synced              = false;

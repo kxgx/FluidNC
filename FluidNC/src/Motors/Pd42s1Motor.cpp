@@ -541,6 +541,7 @@ namespace MotorDrivers {
             _disabled = true;
             return false;
         }
+        const uint32_t syncPositionGen = _positionGeneration;
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
         size_t  responseLen = 0;
@@ -598,6 +599,16 @@ namespace MotorDrivers {
         // are re-sent on every sync so a driver reset cannot silently restore
         // a much stiffer loop.
         apply_driver_tuning();
+
+        // A zero/reset may have invalidated this motor while the version,
+        // position, enable and tuning transactions above were in flight.
+        // Committing the stale base here would re-enable motion toward the
+        // old coordinate, so discard the result and retry from a new sync.
+        if (syncPositionGen != _positionGeneration) {
+            _synced = false;
+            _targetDirty = true;
+            return false;
+        }
 
         // On a resync after a lost command/error, keep the current desired
         // target instead of adopting the driver's (possibly lagging) position,
@@ -961,6 +972,8 @@ namespace MotorDrivers {
         // The driver's encoder is now 0, but the cached base and step count
         // belong to the old coordinate system.  Force a fresh sync before
         // accepting another absolute target.
+        ++_positionGeneration;
+        _nextSyncMs          = 0;
         _synced              = false;
         _adoptPositionOnSync = true;
         _online              = false;

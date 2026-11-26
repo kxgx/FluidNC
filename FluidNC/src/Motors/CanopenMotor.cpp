@@ -133,7 +133,10 @@ namespace MotorDrivers {
     }
 
     void IRAM_ATTR CanopenMotor::step_isr() {
-        _stepCount += _direction ? 1 : -1;
+        // Direction bit 1 is negative, matching Stepping::step()'s axis_steps
+        // convention.  Keep this motor-local counter in the same sign
+        // convention as the shared axis counter.
+        _stepCount += _direction ? -1 : 1;
     }
 
     void IRAM_ATTR CanopenMotor::set_direction_isr(bool dir) {
@@ -191,7 +194,11 @@ namespace MotorDrivers {
     int32_t CanopenMotor::target_position() const {
         // Do not assume _baseStepCount is zero: a resync during motion updates
         // the base position but the hardware step counter keeps counting.
-        const int64_t steps  = int64_t(Stepping::getSteps(_axis)) - int64_t(_baseStepCount);
+        // Use this motor's own counter, not the shared axis counter:
+        // Stepping::step() advances the axis counter even when this motor is
+        // blocked/limited, so a dual-motor or limit-blocked axis would
+        // otherwise receive a target that moves the stationary motor.
+        const int64_t steps  = int64_t(_stepCount) - int64_t(_baseStepCount);
         double        scaled = double(steps) * double(_countsPerStep);
         if (_invertDirection) {
             scaled = -scaled;
@@ -223,7 +230,7 @@ namespace MotorDrivers {
 
     void CanopenMotor::resync_base(int32_t actual, const char* reason) {
         _basePosition      = actual;
-        _baseStepCount     = int32_t(Stepping::getSteps(_axis));
+        _baseStepCount     = _stepCount;
         _driverPosition    = actual;
         _lastTarget        = actual;
         _lastStreamedSteps = _baseStepCount;
@@ -403,7 +410,7 @@ namespace MotorDrivers {
         // drive must settle on the last commanded target.  A persistent
         // mismatch means steps or target updates were lost, so re-anchor to the
         // actual position instead of commanding a stale target.
-        const int32_t steps = int32_t(Stepping::getSteps(_axis));
+        const int32_t steps = _stepCount;
         if (steps == _lastStreamedSteps) {
             if (!_idleSinceMs) {
                 _idleSinceMs = now_ms;
@@ -483,7 +490,7 @@ namespace MotorDrivers {
         if (int32_t(now_ms - _nextUpdateMs) >= 0) {
             _nextUpdateMs = now_ms + _updateMs;
 
-            const int32_t steps  = int32_t(Stepping::getSteps(_axis));
+            const int32_t steps  = _stepCount;
             const int32_t target = target_position();
             if (_targetDirty || target != _lastTarget) {
                 if (send_target(target)) {

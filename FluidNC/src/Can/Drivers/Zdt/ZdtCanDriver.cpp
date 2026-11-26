@@ -55,7 +55,12 @@ namespace Machine {
         if (!send_command(address, message, length, TRANSACTION_TIMEOUT_MS)) {
             return false;
         }
-        responseLen = _bus->receive_chunk(response, ZdtProtocol::MAX_RESPONSE, TRANSACTION_TIMEOUT_MS);
+        uint32_t responseId       = 0;
+        bool     responseExtended = false;
+        responseLen = _bus->receive_frame(responseId, responseExtended, response, ZdtProtocol::MAX_RESPONSE, TRANSACTION_TIMEOUT_MS);
+        if (!responseLen || !responseExtended || (responseId >> 8) != address) {
+            return false;
+        }
         return ZdtProtocol::parse_ack(response, responseLen, expectedFunction);
     }
 
@@ -74,7 +79,12 @@ namespace Machine {
             if (!send_command(address, request, length, TRANSACTION_TIMEOUT_MS)) {
                 return false;
             }
-            responseLen = _bus->receive_chunk(response, sizeof(response), TRANSACTION_TIMEOUT_MS);
+            uint32_t responseId       = 0;
+            bool     responseExtended = false;
+            responseLen = _bus->receive_frame(responseId, responseExtended, response, sizeof(response), TRANSACTION_TIMEOUT_MS);
+            if (!responseLen || !responseExtended || (responseId >> 8) != address) {
+                return false;
+            }
         }
         return ZdtProtocol::parse_position(ZdtFirmware::Emm, response, responseLen, ZdtProtocol::Defaults::COUNTS_PER_REV, counts);
     }
@@ -113,7 +123,16 @@ namespace Machine {
     }
 
     void ZdtCanDriver::restart_drivers() {
-        log_info("ZDT CAN: restart is not implemented for safety");
+        if (!_bus || !_bus->ready()) {
+            log_info("ZDT CAN: reset skipped; bus not ready");
+            return;
+        }
+        // ZDT has no addressed reset command in the free protocol.  $CANReset
+        // still has to be the explicit release path for the safe-stop latch;
+        // clear it and force every client to re-read its absolute position.
+        _bus->invalidate_all_client_positions();
+        _bus->clear_stop_latch();
+        log_info("ZDT CAN: stop latch cleared; run $CANScan before moving");
     }
 
     void ZdtCanDriver::enable_all_driver_echo() {
@@ -194,9 +213,16 @@ namespace Machine {
     }
 
     bool ZdtCanDriver::stop_all_drivers() {
-        if (!_bus) {
+        if (!_bus || !_bus->ready()) {
             return false;
         }
+        _bus->latch_stop();
+        // Let a poll that already passed the latch check finish before sending
+        // the stop frames; otherwise that poll could re-enable/continue motion
+        // after this safe-stop returns.
+        _bus->wait_for_worker_idle();
+        // transact() takes the bus lock itself; do not hold it here or the
+        // first stop frame would self-deadlock.
         uint8_t addresses[CanBus::MAX_CLIENTS];
         size_t  count = _bus->client_addresses(addresses, CanBus::MAX_CLIENTS);
         bool    ok    = true;
@@ -214,6 +240,10 @@ namespace Machine {
                 ok = false;
             }
         }
+        // A stopped ZDT axis has no usable absolute base until it is re-synced.
+        // Invalidate now so a later stop/resume cycle cannot stream a target
+        // based on the pre-stop step counter.
+        _bus->invalidate_all_client_positions();
         return ok;
     }
 

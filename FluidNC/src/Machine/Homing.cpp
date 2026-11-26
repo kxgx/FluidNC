@@ -9,6 +9,9 @@
 #include "Limit.h"     // ambiguousLimit
 #include "Machine/Axes.h"
 #include "Machine/MachineConfig.h"  // config
+#if MAX_N_CAN
+#    include "Can/CanBus.h"
+#endif
 
 #include <cmath>
 
@@ -324,6 +327,16 @@ namespace Machine {
 
         sys.step_control = {};                     // Return step control to normal operation.
         axes->set_homing_mode(_cycleAxes, false);  // tell motors homing is done
+
+#if MAX_N_CAN
+        // set_steps() invalidates every absolute CAN client's cached position.
+        // Homing returns through the normal G-code path immediately, so wait
+        // here for the CAN worker to re-read the drives before the next homing
+        // cycle or the first post-homing move is evaluated.
+        if (config->_can && !config->_can->wait_for_all_clients_synced(2000)) {
+            log_error("Homing: CAN clients did not re-sync; motion is gated");
+        }
+#endif
     }
 
 #if 0

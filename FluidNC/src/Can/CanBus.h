@@ -148,6 +148,11 @@ namespace Machine {
             return true;
         }
 
+        // Blocks until every registered client has rebuilt its absolute
+        // position after a step-coordinate change (homing, zeroing, reset).
+        // Returns false on timeout or when the bus is stopped/latched.
+        bool wait_for_all_clients_synced(uint32_t timeout_ms);
+
         bool motion_ready() const {
             return _control_ready && _task_handle != nullptr && !_stop_latched.load(std::memory_order_acquire) && !_inhibited &&
                    all_clients_synced();
