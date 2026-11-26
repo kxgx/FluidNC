@@ -20,7 +20,7 @@ using namespace Machine;
 
 namespace MotorDrivers {
     namespace {
-        constexpr uint32_t TRANSACTION_TIMEOUT_MS = 300;
+        constexpr uint32_t TRANSACTION_TIMEOUT_MS = ZdtProtocol::Timing::TRANSACTION_TIMEOUT_MS;
 
         void IRAM_ATTR zdt_step_thunk(MotorDriver* driver) {
             static_cast<ZdtMotor*>(driver)->step_isr();
@@ -43,7 +43,7 @@ namespace MotorDrivers {
     void ZdtMotor::validate() {
         Assert(config != nullptr && config->_can != nullptr, "zdt motor driver requires a can: section");
         Assert(config->_can->configured(), "zdt motor driver requires can: tx_pin and rx_pin");
-        Assert(_address >= 1 && _address <= Machine::CanBus::MAX_CLIENTS, "zdt address must be 1..MAX_CLIENTS");
+        Assert(_address >= ZdtProtocol::ADDRESS_MIN && _address <= Machine::CanBus::MAX_CLIENTS, "zdt address must be 1..MAX_CLIENTS");
 
         auto axisConfig = Axes::_axis[axis_index()];
         if (_countsPerRev == 0) {
@@ -67,12 +67,12 @@ namespace MotorDrivers {
             Assert(_countsPerStep == 1.0f,
                    "zdt counts_per_step must be 1.0 when axis mechanics supply counts_per_rev");
         }
-        Assert(_countsPerRev > 0 && _countsPerRev <= 1000000, "zdt counts_per_rev must be 1..1000000");
+        Assert(_countsPerRev >= ZdtProtocol::Limits::COUNTS_PER_REV_MIN && _countsPerRev <= ZdtProtocol::Limits::COUNTS_PER_REV_MAX, "zdt counts_per_rev is outside the protocol range");
         Assert(_countsPerStep > 0.0f, "zdt counts_per_step must be positive");
-        Assert(_speedRpm >= 1 && _speedRpm <= 3000, "zdt speed_rpm must be 1..3000 for the X42S free protocol");
-        Assert(_speedMarginPct >= 0 && _speedMarginPct <= 100, "zdt speed_margin_pct must be 0..100");
+        Assert(_speedRpm >= ZdtProtocol::Limits::SPEED_RPM_MIN && _speedRpm <= ZdtProtocol::Limits::SPEED_RPM_MAX, "zdt speed_rpm is outside the X42S free-protocol range");
+        Assert(_speedMarginPct >= ZdtProtocol::Limits::SPEED_MARGIN_MIN && _speedMarginPct <= ZdtProtocol::Limits::SPEED_MARGIN_MAX, "zdt speed_margin_pct is outside the protocol range");
         Assert(_accel >= 0 && _accel <= 65535, "zdt accel must be 0..65535");
-        Assert(_updateMs >= 2 && _updateMs <= 1000, "zdt update_ms must be 2..1000");
+        Assert(_updateMs >= ZdtProtocol::Limits::UPDATE_MS_MIN && _updateMs <= ZdtProtocol::Limits::UPDATE_MS_MAX, "zdt update_ms is outside the protocol range");
 
         Assert(string_util::equal_ignore_case(_modeName, "position_stream"),
                "zdt mode must be position_stream; other motion modes are not implemented");
@@ -97,7 +97,7 @@ namespace MotorDrivers {
             Assert(false, "zdt firmware must be Emm or X");
         }
         if (_firmware == ZdtFirmware::Emm) {
-            Assert(_accel >= 0 && _accel <= 255, "zdt Emm accel is the native 0..255 ramp setting");
+            Assert(_accel >= ZdtProtocol::Limits::ACCEL_EMM_MIN && _accel <= ZdtProtocol::Limits::ACCEL_EMM_MAX, "zdt Emm accel is the native 0..255 ramp setting");
         } else {
             Assert(_accel >= 1, "zdt X accel is RPM/s and must be at least 1");
         }
@@ -113,14 +113,14 @@ namespace MotorDrivers {
             // must cover the margin too; otherwise the configured catch-up
             // headroom would silently disappear at maximum feed.
             const double requiredWithMargin = requiredRpm * (100.0 + double(_speedMarginPct)) / 100.0;
-            Assert(requiredWithMargin <= 3000.0,
+            Assert(requiredWithMargin <= double(ZdtProtocol::Limits::SPEED_RPM_MAX),
                    "zdt axis maximum feed plus speed_margin_pct needs >3000 RPM; lower max speed/accel or margin");
             // Tiny epsilon avoids a float-derived 100.0000001 becoming 101.
             const int required = int(std::ceil(requiredWithMargin - 1e-9));
             Assert(_speedRpm >= required,
                    "zdt speed_rpm is below the axis maximum feed plus speed_margin_pct for speed_source=planner");
         } else {
-            Assert(requiredRpm <= 3000.0,
+            Assert(requiredRpm <= double(ZdtProtocol::Limits::SPEED_RPM_MAX),
                    "zdt axis maximum feed needs >3000 RPM; lower max speed or use a larger distance_per_rev");
             const int required = int(std::ceil(requiredRpm - 1e-9));
             Assert(_speedRpm >= required,
@@ -212,8 +212,16 @@ namespace MotorDrivers {
         }
         CanBus::Lock lock(*_bus);
         _bus->flush_receive();
-        if (!_bus->send_chunked(uint32_t(_address) << 8, request + 1, length - 1, TRANSACTION_TIMEOUT_MS)) {
+        ZdtProtocol::Frame frames[(ZdtProtocol::MAX_MESSAGE / ZdtProtocol::FRAME_PAYLOAD) + 1];
+        const size_t count =
+            ZdtProtocol::build_frames(uint8_t(_address), request + 1, length - 1, frames, sizeof(frames) / sizeof(frames[0]));
+        if (!count) {
             return false;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            if (!_bus->send_frame(frames[i].id, true, frames[i].data, frames[i].length, TRANSACTION_TIMEOUT_MS)) {
+                return false;
+            }
         }
         // The relative move has already left the controller.  Record that fact
         // separately from the acknowledgement: a missing ACK must not cause the
@@ -222,13 +230,13 @@ namespace MotorDrivers {
 
         uint32_t responseId = 0;
         bool     extended   = false;
-        response_len        = _bus->receive_frame(responseId, extended, response, 16, TRANSACTION_TIMEOUT_MS);
+        response_len        = _bus->receive_frame(responseId, extended, response, ZdtProtocol::MAX_RESPONSE, TRANSACTION_TIMEOUT_MS);
         if (!response_len || !extended || uint8_t(responseId >> 8) != uint8_t(_address)) {
             return false;
         }
         if (response[0] == function && response_len >= 3) {
             const uint8_t status = response[1];
-            if (status == 0xE2 || status == 0xEE || status == 0x9E) {
+            if (status == ZdtProtocol::Status::ACK_ERROR || status == ZdtProtocol::Status::ACK_BAD_FORMAT || status == ZdtProtocol::Status::ACK_HOMING_FAIL) {
                 _lastAckError = true;
                 return false;
             }
@@ -243,9 +251,9 @@ namespace MotorDrivers {
         if (!length) {
             return false;
         }
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  response_len = 0;
-        if (!transact(request, length, 0xF3, response, response_len)) {
+        if (!transact(request, length, ZdtProtocol::Function::ENABLE, response, response_len)) {
             return false;
         }
         _enabled = enable;
@@ -264,9 +272,9 @@ namespace MotorDrivers {
         if (!length) {
             return false;
         }
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  response_len = 0;
-        return transact(request, length, 0xFE, response, response_len);
+        return transact(request, length, ZdtProtocol::Function::STOP, response, response_len);
     }
 
     void ZdtMotor::report_motion_fault(const char* reason) {
@@ -295,9 +303,9 @@ namespace MotorDrivers {
         if (!length) {
             return false;
         }
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  response_len = 0;
-        return transact(request, length, 0xFD, response, response_len);
+        return transact(request, length, ZdtProtocol::Function::POSITION, response, response_len);
     }
 
     void ZdtMotor::can_poll(uint32_t now_ms) {

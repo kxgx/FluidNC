@@ -581,49 +581,6 @@ namespace Machine {
         return ok;
     }
 
-    bool CanBus::send_chunked(uint32_t base_id, const uint8_t* data, size_t len, uint32_t timeout_ms) {
-        if (!_ready || !data || !len) {
-            return false;
-        }
-        if (_min_message_gap_ms && _message_sent) {
-            uint32_t elapsed = now_ms() - _last_message_end_ms;
-            if (elapsed < _min_message_gap_ms) {
-                vTaskDelay(pdMS_TO_TICKS(_min_message_gap_ms - elapsed));
-            }
-        }
-
-        // ZDT free protocol: `data` starts at the function code.  Every CAN
-        // packet repeats the function code and carries up to 7 following
-        // bytes.  The final payload byte (checksum) is just another data byte.
-        const uint8_t function = data[0];
-        const size_t  payloadLen = len - 1;
-        const uint8_t* payload   = data + 1;
-
-        bool     ok     = true;
-        size_t   offset = 0;
-        uint32_t packet = 0;
-        do {
-            size_t chunk = payloadLen - offset;
-            if (chunk > (TWAI_FRAME_MAX_DLC - 1)) {
-                chunk = TWAI_FRAME_MAX_DLC - 1;
-            }
-            uint8_t frame[TWAI_FRAME_MAX_DLC];
-            frame[0] = function;
-            if (chunk) {
-                memcpy(frame + 1, payload + offset, chunk);
-            }
-            if (!send_frame(base_id | packet, true, frame, chunk + 1, timeout_ms)) {
-                ok = false;
-                break;
-            }
-            offset += chunk;
-            ++packet;
-        } while (offset < payloadLen);
-        _last_message_end_ms = now_ms();
-        _message_sent        = true;
-        return ok;
-    }
-
     size_t CanBus::receive_frame(uint32_t& id, bool& extended, uint8_t* buf, size_t max_len, uint32_t timeout_ms) {
         id       = 0;
         extended = false;

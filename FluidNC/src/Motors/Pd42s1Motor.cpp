@@ -149,10 +149,10 @@ namespace MotorDrivers {
     }
 
     namespace {
-        constexpr uint32_t TRANSACTION_TIMEOUT_MS = 300;
-        constexpr uint32_t RETRY_MS               = 500;
+        constexpr uint32_t TRANSACTION_TIMEOUT_MS = Pd42s1Protocol::Timing::TRANSACTION_TIMEOUT_MS;
+        constexpr uint32_t RETRY_MS               = Pd42s1Protocol::Timing::RETRY_MS;
         constexpr uint32_t WARN_INTERVAL_MS       = 5000;
-        constexpr uint32_t POSITION_UNITS_PER_REV = 51200;
+        constexpr uint32_t POSITION_UNITS_PER_REV = Pd42s1Protocol::Limits::POSITION_UNITS_PER_REV;
 
         // Throttle for the broadcast echo-recovery fallback, so several motors
         // resynchronising at the same time do not flood the bus.
@@ -162,24 +162,7 @@ namespace MotorDrivers {
             return uint32_t(esp_timer_get_time() / 1000);
         }
 
-        const char* error_code_name(uint8_t code) {
-            switch (code) {
-                case 0xE1:
-                    return "frame too short";
-                case 0xE2:
-                    return "bad frame header";
-                case 0xE3:
-                    return "bad frame tail";
-                case 0xE4:
-                    return "checksum error";
-                case 0xE5:
-                    return "unsupported function";
-                case 0xE6:
-                    return "invalid data";
-                default:
-                    return "unknown error";
-            }
-        }
+
 
         void IRAM_ATTR pd42s1_step_thunk(MotorDriver* driver) {
             static_cast<Pd42s1Motor*>(driver)->step_isr();
@@ -224,9 +207,12 @@ namespace MotorDrivers {
                "pd42s1 address must be 1..MAX_CLIENTS (16 in this firmware)");
         Machine::CanBus::register_configured_address(uint8_t(_address));
         Assert(_countsPerStep > 0.0f, "pd42s1 counts_per_step must be positive");
-        Assert(_speedRpm >= 1 && _speedRpm <= 6000, "pd42s1 speed_rpm must be 1..6000");
-        Assert(_accel >= 0 && _accel <= 200, "pd42s1 accel must be 0..200");
-        Assert(_updateMs >= 2 && _updateMs <= 1000, "pd42s1 update_ms must be 2..1000");
+        Assert(_speedRpm >= Pd42s1Protocol::Limits::SPEED_RPM_MIN && _speedRpm <= Pd42s1Protocol::Limits::SPEED_RPM_MAX,
+               "pd42s1 speed_rpm is outside the protocol range");
+        Assert(_accel >= Pd42s1Protocol::Limits::ACCEL_MIN && _accel <= Pd42s1Protocol::Limits::ACCEL_MAX,
+               "pd42s1 accel is outside the protocol range");
+        Assert(_updateMs >= Pd42s1Protocol::Limits::UPDATE_MS_MIN && _updateMs <= Pd42s1Protocol::Limits::UPDATE_MS_MAX,
+               "pd42s1 update_ms is outside the protocol range");
         // The block_targets path mixes planner axis coordinates with the
         // per-motor step counter and has no safe stop path on limit/alarm.
         // Keep it disabled until a separate, verified implementation exists.
@@ -239,13 +225,13 @@ namespace MotorDrivers {
         //
         //   driver units/mm = steps_per_mm * counts_per_step
         //   driver units/min = max_rate_mm_per_min * driver units/mm
-        //   driver RPM = driver units/min / 51200
+        //   driver RPM = driver units/min / POSITION_UNITS_PER_REV
         auto axisConfig = Axes::_axis[axis_index()];
         Assert(!(_blockTargets && axisConfig->hasDualMotor()),
                "pd42s1 block_targets is not supported on a dual-motor axis; use streaming mode");
-        float requiredRpm = axisConfig->_maxRate * axisConfig->_stepsPerMm * _countsPerStep / 51200.0f;
-        if (requiredRpm > 6000.0f) {
-            _speedRpm = 6000;
+        float requiredRpm = axisConfig->_maxRate * axisConfig->_stepsPerMm * _countsPerStep / float(Pd42s1Protocol::Limits::POSITION_UNITS_PER_REV);
+        if (requiredRpm > float(Pd42s1Protocol::Limits::SPEED_RPM_MAX)) {
+            _speedRpm = Pd42s1Protocol::Limits::SPEED_RPM_MAX;
         } else {
             int required = int(std::ceil(requiredRpm));
             if (required > _speedRpm) {
@@ -253,9 +239,9 @@ namespace MotorDrivers {
             }
         }
 
-        float requiredAccel = axisConfig->_acceleration * axisConfig->_stepsPerMm * _countsPerStep / 51200.0f;
-        if (requiredAccel > 200.0f) {
-            _accel = 200;
+        float requiredAccel = axisConfig->_acceleration * axisConfig->_stepsPerMm * _countsPerStep / float(Pd42s1Protocol::Limits::POSITION_UNITS_PER_REV);
+        if (requiredAccel > float(Pd42s1Protocol::Limits::ACCEL_MAX)) {
+            _accel = Pd42s1Protocol::Limits::ACCEL_MAX;
         } else {
             int required = int(std::ceil(requiredAccel));
             if (required > _accel) {
@@ -380,12 +366,12 @@ namespace MotorDrivers {
             if (expected != 0 && total >= expected) {
                 if (total == expected && Pd42s1Protocol::valid_response(response, total) && response[1] == request[1] &&
                     response[2] == request[2]) {
-                    if (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6) {
+                    if (total == 6 && Pd42s1Protocol::Status::is_error_code(response[3])) {
                         // The driver answered but rejected the command.  Report the
                         // manual's error code (0xE1..0xE6) instead of letting it hide
                         // behind the generic "not acknowledged" warnings.
                         char message[64];
-                        snprintf(message, sizeof(message), "command error 0x%02X (%s)", response[3], error_code_name(response[3]));
+                        snprintf(message, sizeof(message), "command error 0x%02X (%s)", response[3], Pd42s1Protocol::Status::error_code_name(response[3]));
                         _lastErrorCode = response[3];
                         warn_throttled(now_ms(), message);
                         _bus->flush_receive();
@@ -1014,18 +1000,18 @@ namespace MotorDrivers {
         _blockTargetSteps   = targetSteps;
         _blockBaseStepCount = _baseStepCount;
 
-        // 51200 position units per revolution.  feedMmMin is mm/min and
+        // POSITION_UNITS_PER_REV position units per revolution.  feedMmMin is mm/min and
         // accelMmSec2 is mm/s^2; convert both to the driver's RPM units.
-        double speedRpm = double(feedMmMin) * countsPerMm / 51200.0;
-        double accelRpm = double(accelMmSec2) * countsPerMm / 51200.0;
+        double speedRpm = double(feedMmMin) * countsPerMm / double(Pd42s1Protocol::Limits::POSITION_UNITS_PER_REV);
+        double accelRpm = double(accelMmSec2) * countsPerMm / double(Pd42s1Protocol::Limits::POSITION_UNITS_PER_REV);
         if (speedRpm < 1.0) {
             speedRpm = 1.0;
         }
         if (speedRpm > double(_speedRpm)) {
             speedRpm = double(_speedRpm);
         }
-        if (speedRpm > 6000.0) {
-            speedRpm = 6000.0;
+        if (speedRpm > double(Pd42s1Protocol::Limits::SPEED_RPM_MAX)) {
+            speedRpm = double(Pd42s1Protocol::Limits::SPEED_RPM_MAX);
         }
         if (accelRpm < 1.0) {
             accelRpm = 1.0;
@@ -1033,8 +1019,8 @@ namespace MotorDrivers {
         if (accelRpm > double(_accel)) {
             accelRpm = double(_accel);
         }
-        if (accelRpm > 200.0) {
-            accelRpm = 200.0;
+        if (accelRpm > double(Pd42s1Protocol::Limits::ACCEL_MAX)) {
+            accelRpm = double(Pd42s1Protocol::Limits::ACCEL_MAX);
         }
 
         _blockSpeedRpm    = uint16_t(speedRpm);

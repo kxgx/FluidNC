@@ -1,6 +1,17 @@
 // Copyright (c) 2026 - FluidNC contributors
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
+/*
+    METADATA
+    Vendor:                   Zhang Datou (张大头) / ZDT
+    Driver:                   ZDT XS-series CAN command facade
+    Protocol:                 ZDT free protocol; Emm/X firmware families
+    Firmware model:           Emm (default) or X
+    Protocol header:          Can/Protocols/Private/Zdt/ZdtProtocol.h
+    Verification status:      hardware exercised; protocol constants owned by
+                              the protocol header above.
+*/
+
 #pragma once
 
 #include "Config.h"
@@ -45,6 +56,7 @@ namespace Machine {
 
     private:
         bool transact(uint8_t address, const uint8_t* message, size_t length, uint8_t expectedFunction, uint8_t* response, size_t& responseLen);
+        bool send_command(uint8_t address, const uint8_t* message, size_t length, uint32_t timeout_ms);
         bool read_counts(uint8_t address, int32_t& counts);
 
         CanBus* _bus;

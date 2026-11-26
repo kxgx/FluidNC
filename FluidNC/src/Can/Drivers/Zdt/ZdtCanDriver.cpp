@@ -15,7 +15,7 @@ using namespace MotorDrivers;
 
 namespace Machine {
     namespace {
-        constexpr uint32_t TRANSACTION_TIMEOUT_MS = 300;
+        constexpr uint32_t TRANSACTION_TIMEOUT_MS = ZdtProtocol::Timing::TRANSACTION_TIMEOUT_MS;
 
         CanDriver* createZdt(CanBus* bus) {
             return bus ? new ZdtCanDriver(bus) : nullptr;
@@ -32,6 +32,23 @@ namespace Machine {
         return true;
     }
 
+    bool ZdtCanDriver::send_command(uint8_t address, const uint8_t* message, size_t length, uint32_t timeout_ms) {
+        if (!_bus || !_bus->ready() || !message || length < 2) {
+            return false;
+        }
+        ZdtProtocol::Frame frames[(ZdtProtocol::MAX_MESSAGE / ZdtProtocol::FRAME_PAYLOAD) + 1];
+        const size_t count = ZdtProtocol::build_frames(address, message + 1, length - 1, frames, sizeof(frames) / sizeof(frames[0]));
+        if (!count) {
+            return false;
+        }
+        for (size_t i = 0; i < count; ++i) {
+            if (!_bus->send_frame(frames[i].id, true, frames[i].data, frames[i].length, timeout_ms)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     bool ZdtCanDriver::transact(
         uint8_t address, const uint8_t* message, size_t length, uint8_t expectedFunction, uint8_t* response, size_t& responseLen) {
         responseLen = 0;
@@ -40,10 +57,10 @@ namespace Machine {
         }
         CanBus::Lock lock(*_bus);
         _bus->flush_receive();
-        if (!_bus->send_chunked(uint32_t(address) << 8, message + 1, length - 1, TRANSACTION_TIMEOUT_MS)) {
+        if (!send_command(address, message, length, TRANSACTION_TIMEOUT_MS)) {
             return false;
         }
-        responseLen = _bus->receive_chunk(response, 16, TRANSACTION_TIMEOUT_MS);
+        responseLen = _bus->receive_chunk(response, ZdtProtocol::MAX_RESPONSE, TRANSACTION_TIMEOUT_MS);
         return ZdtProtocol::parse_ack(response, responseLen, expectedFunction);
     }
 
@@ -54,17 +71,17 @@ namespace Machine {
             return false;
         }
 
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  responseLen = 0;
         {
             CanBus::Lock lock(*_bus);
             _bus->flush_receive();
-            if (!_bus->send_chunked(uint32_t(address) << 8, request + 1, length - 1, TRANSACTION_TIMEOUT_MS)) {
+            if (!send_command(address, request, length, TRANSACTION_TIMEOUT_MS)) {
                 return false;
             }
             responseLen = _bus->receive_chunk(response, sizeof(response), TRANSACTION_TIMEOUT_MS);
         }
-        return ZdtProtocol::parse_position(ZdtFirmware::Emm, response, responseLen, 3200, counts);
+        return ZdtProtocol::parse_position(ZdtFirmware::Emm, response, responseLen, ZdtProtocol::Defaults::COUNTS_PER_REV, counts);
     }
 
     int ZdtCanDriver::scan() {
@@ -114,21 +131,21 @@ namespace Machine {
         if (!length) {
             return false;
         }
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  responseLen = 0;
-        return transact(address, request, length, 0xF3, response, responseLen);
+        return transact(address, request, length, ZdtProtocol::Function::ENABLE, response, responseLen);
     }
 
     bool ZdtCanDriver::send_single_position(uint8_t address, int32_t delta, uint16_t speed_rpm, uint8_t accel) {
         uint8_t request[ZdtProtocol::MAX_MESSAGE];
         size_t  length = ZdtProtocol::build_relative_position(
-            ZdtFirmware::Emm, address, delta, speed_rpm, accel, 3200, ZdtChecksum::Fixed6B, request, sizeof(request));
+            ZdtFirmware::Emm, address, delta, speed_rpm, accel, ZdtProtocol::Defaults::COUNTS_PER_REV, ZdtChecksum::Fixed6B, request, sizeof(request));
         if (!length) {
             return false;
         }
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  responseLen = 0;
-        bool    ok          = transact(address, request, length, 0xFD, response, responseLen);
+        bool    ok          = transact(address, request, length, ZdtProtocol::Function::POSITION, response, responseLen);
         if (ok && _bus) {
             _bus->invalidate_client_position(address);
         }
@@ -150,9 +167,9 @@ namespace Machine {
         if (!length) {
             return false;
         }
-        uint8_t response[16];
+        uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  responseLen = 0;
-        bool    ok          = transact(address, request, length, 0x0A, response, responseLen);
+        bool    ok          = transact(address, request, length, ZdtProtocol::Function::ZERO_POSITION, response, responseLen);
         if (ok && _bus) {
             _bus->invalidate_client_position(address);
         }
@@ -195,9 +212,9 @@ namespace Machine {
                 ok = false;
                 continue;
             }
-            uint8_t response[16];
+            uint8_t response[ZdtProtocol::MAX_RESPONSE];
             size_t  responseLen = 0;
-            if (!transact(addresses[i], request, length, 0xFE, response, responseLen)) {
+            if (!transact(addresses[i], request, length, ZdtProtocol::Function::STOP, response, responseLen)) {
                 can_log_error("ZDT CAN: stop failed for address " << int(addresses[i]));
                 ok = false;
             }
@@ -206,7 +223,7 @@ namespace Machine {
     }
 
     void ZdtCanDriver::read_raw(uint8_t address, uint8_t function) {
-        uint8_t message[4] = { address, function, 0x6B, 0 };
+        uint8_t message[4] = { address, function, ZdtProtocol::Status::CHECKSUM_FIXED, 0 };
         (void)message;
         log_info("ZDT CAN: raw read is not implemented");
     }
@@ -234,14 +251,14 @@ namespace Machine {
                 log_info("ZDT CAN: address " << int(address) << " firmware report request build failed");
                 continue;
             }
-            uint8_t response[16];
+            uint8_t response[ZdtProtocol::MAX_RESPONSE];
             size_t  responseLen = 0;
             uint32_t responseId = 0;
             bool     responseExtended = false;
             {
                 CanBus::Lock lock(*_bus);
                 _bus->flush_receive();
-                if (!_bus->send_chunked(uint32_t(address) << 8, request + 1, length - 1, TRANSACTION_TIMEOUT_MS)) {
+                if (!send_command(address, request, length, TRANSACTION_TIMEOUT_MS)) {
                     log_info("ZDT CAN: address " << int(address) << " firmware report send failed");
                     continue;
                 }

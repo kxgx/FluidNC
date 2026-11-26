@@ -3,6 +3,7 @@
 #include "Can/Protocols/Private/Zdt/ZdtProtocol.h"
 
 #include <cstdint>
+#include <cstring>
 
 using MotorDrivers::ZdtChecksum;
 using MotorDrivers::ZdtFirmware;
@@ -15,6 +16,25 @@ TEST(ZdtProtocol, BuildsReadPosition) {
     EXPECT_EQ(frame[0], 3);
     EXPECT_EQ(frame[1], 0x36);
     EXPECT_EQ(frame[2], 0x6B);
+}
+
+
+TEST(ZdtProtocol, SplitsFramesLikeVendorCanExample) {
+    // Manual example: 01 FD 01 0F A0 00 00 01 FA 00 00 00 6B
+    const uint8_t logical[] = { 0x01, 0xFD, 0x01, 0x0F, 0xA0, 0x00, 0x00, 0x01, 0xFA, 0x00, 0x00, 0x00, 0x6B };
+    ZdtProtocol::Frame frames[4] = {};
+    const size_t count = ZdtProtocol::build_frames(1, logical + 1, sizeof(logical) - 1, frames, 4);
+    ASSERT_EQ(count, 2u);
+    EXPECT_EQ(frames[0].id, 0x0100u);
+    EXPECT_EQ(frames[0].length, 8u);
+    const uint8_t first[] = { 0xFD, 0x01, 0x0F, 0xA0, 0x00, 0x00, 0x01, 0xFA };
+    EXPECT_EQ(std::memcmp(frames[0].data, first, sizeof(first)), 0);
+    EXPECT_EQ(frames[1].id, 0x0101u);
+    EXPECT_EQ(frames[1].length, 5u);
+    const uint8_t second[] = { 0xFD, 0x00, 0x00, 0x00, 0x6B };
+    EXPECT_EQ(std::memcmp(frames[1].data, second, sizeof(second)), 0);
+
+    EXPECT_EQ(ZdtProtocol::build_frames(1, logical + 1, sizeof(logical) - 1, frames, 1), 0u);
 }
 
 TEST(ZdtProtocol, BuildsEnable) {

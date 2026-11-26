@@ -23,6 +23,7 @@
 #if MAX_N_CAN
 
 #    include "Can/CanBus.h"
+#    include "Can/Protocols/Private/Pd42s1/Pd42s1Protocol.h"
 #    include <vector>
 
 namespace MotorDrivers {
@@ -103,6 +104,7 @@ namespace MotorDrivers {
 
             // @config speed_rpm
             // @default 600
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning per-machine
             // Speed in RPM that the driver is allowed to use while following
             // the position stream.  Must be at least the axis's maximum speed
@@ -114,6 +116,7 @@ namespace MotorDrivers {
 
             // @config accel
             // @default 200
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning per-machine
             // Acceleration in revolutions/second^2 (0..200) that the driver is
             // allowed to use while following the position stream.  The
@@ -125,6 +128,7 @@ namespace MotorDrivers {
 
             // @config update_ms
             // @default 20
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning typical
             // Interval in milliseconds between position commands.  The driver
             // interpolates between them.  Smaller values track the step stream
@@ -133,6 +137,7 @@ namespace MotorDrivers {
 
             // @config status_poll_ms
             // @default 1000
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning typical
             // Interval in milliseconds between driver position readbacks, used
             // for diagnostics.  Set to 0 to disable readbacks.
@@ -208,10 +213,10 @@ namespace MotorDrivers {
         int32_t  _syncGroup       = 0;
         float    _countsPerStep   = 1.0f;
         bool     _invertDirection = false;
-        int32_t  _speedRpm        = 600;
-        int32_t  _accel           = 200;
-        uint32_t _updateMs        = 20;
-        uint32_t _statusPollMs    = 1000;
+        int32_t  _speedRpm        = Pd42s1Protocol::Defaults::SPEED_RPM;
+        int32_t  _accel           = Pd42s1Protocol::Defaults::ACCEL;
+        uint32_t _updateMs        = Pd42s1Protocol::Defaults::UPDATE_MS;
+        uint32_t _statusPollMs    = Pd42s1Protocol::Defaults::STATUS_POLL_MS;
         int32_t  _maxTorqueMa     = -1;
         bool     _blockTargets    = false;
         bool     _groupFaulted    = false;

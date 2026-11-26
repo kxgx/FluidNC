@@ -90,6 +90,7 @@ idf_component_register(SRCS BTConfig.cpp
 							Can/Drivers/Zdt/ZdtCanDriver.cpp
 							Can/NullCanDriver.cpp
 							Can/Protocols/Standard/Canopen/CanopenProtocol.cpp
+Can/Drivers/Canopen/CanopenClient.cpp
 							Machine/SPIBus.cpp
 							Machine/UserInputs.cpp
 							Machine/UserOutputs.cpp

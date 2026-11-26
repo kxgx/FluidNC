@@ -42,6 +42,7 @@
 
 #    include "Can/CanBus.h"
 #    include "Can/Protocols/Standard/Canopen/CanopenProtocol.h"
+#    include "Can/Drivers/Canopen/CanopenClient.h"
 #    include "Motors/MotorDriver.h"
 
 #    include <cstdint>

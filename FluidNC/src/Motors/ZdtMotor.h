@@ -72,6 +72,7 @@ namespace MotorDrivers {
 
             // @config speed_rpm
             // @default 600
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning per-machine
             // Maximum following speed in RPM.  X42S free-protocol speed fields
             // are limited to 3000 RPM, so values above that are rejected.
@@ -79,6 +80,7 @@ namespace MotorDrivers {
 
             // @config accel
             // @default 80
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning per-machine
             // Driver acceleration. For Emm this is the native 0..255 ramp
             // setting; for X it is the native RPM/s value (0..65535).
@@ -86,6 +88,7 @@ namespace MotorDrivers {
 
             // @config update_ms
             // @default 20
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning typical
             // Interval between streamed relative-position commands.
             handler.item("update_ms", _updateMs, 2, 1000);
@@ -120,6 +123,7 @@ namespace MotorDrivers {
 
             // @config speed_margin_pct
             // @default 25
+            // @ignore_drift protocol header owns the symbolic default/limits
             // @tuning per-machine
             // Catch-up margin used only by speed_source=planner.  The
             // following speed is raised by this percentage before the
@@ -173,10 +177,10 @@ namespace MotorDrivers {
         std::string _speedSourceName = "fixed";
         int32_t  _countsPerRev = 0;  // 0 = derive from axis mechanics
         float    _countsPerStep = 1.0f;
-        int32_t  _speedRpm     = 600;
-        int32_t  _speedMarginPct = 25;
-        int32_t  _accel        = 80;
-        uint32_t _updateMs     = 20;
+        int32_t  _speedRpm     = ZdtProtocol::Defaults::SPEED_RPM;
+        int32_t  _speedMarginPct = ZdtProtocol::Defaults::SPEED_MARGIN_PCT;
+        int32_t  _accel        = ZdtProtocol::Defaults::ACCEL_EMM;
+        uint32_t _updateMs     = ZdtProtocol::Defaults::UPDATE_MS;
         bool     _invertDirection = false;
 
         ZdtFirmware     _firmware     = ZdtFirmware::Emm;

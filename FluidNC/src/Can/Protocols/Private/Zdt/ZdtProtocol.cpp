@@ -55,7 +55,7 @@ namespace MotorDrivers {
     uint8_t ZdtProtocol::checksum(const uint8_t* data, size_t len, ZdtChecksum mode) {
         switch (mode) {
             case ZdtChecksum::Fixed6B:
-                return 0x6B;
+                return ZdtProtocol::Status::CHECKSUM_FIXED;
             case ZdtChecksum::Xor: {
                 uint8_t value = 0;
                 for (size_t i = 0; i < len; ++i) {
@@ -71,7 +71,7 @@ namespace MotorDrivers {
                 return value;
             }
         }
-        return 0x6B;
+        return ZdtProtocol::Status::CHECKSUM_FIXED;
     }
 
     size_t ZdtProtocol::build_read_position(uint8_t address, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
@@ -79,8 +79,34 @@ namespace MotorDrivers {
             return 0;
         }
         out[0] = address;
-        out[1] = 0x36;
+        out[1] = ZdtProtocol::Function::READ_POSITION;
         return finish(out, 2, checksumMode);
+    }
+
+    size_t ZdtProtocol::build_frames(uint8_t address, const uint8_t* message, size_t length, Frame* out, size_t capacity) {
+        if (!message || length < 2 || !out || !capacity) {
+            return 0;
+        }
+        const uint8_t function = message[0];
+        const size_t  payloadLen = length - 1;
+        size_t        offset     = 0;
+        size_t        packet     = 0;
+        do {
+            if (packet >= capacity || packet > 0xFF) {
+                return 0;
+            }
+            const size_t chunk = std::min(FRAME_PAYLOAD, payloadLen - offset);
+            Frame&       frame = out[packet];
+            frame.id           = (uint32_t(address) << 8) | uint32_t(packet);
+            frame.length       = uint8_t(chunk + 1);
+            frame.data[0]      = function;
+            if (chunk) {
+                memcpy(frame.data + 1, message + 1 + offset, chunk);
+            }
+            offset += chunk;
+            ++packet;
+        } while (offset < payloadLen);
+        return packet;
     }
 
     size_t ZdtProtocol::build_read_version(uint8_t address, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
@@ -88,7 +114,7 @@ namespace MotorDrivers {
             return 0;
         }
         out[0] = address;
-        out[1] = 0x1F;
+        out[1] = ZdtProtocol::Function::READ_VERSION;
         return finish(out, 2, checksumMode);
     }
 
@@ -97,8 +123,8 @@ namespace MotorDrivers {
             return 0;
         }
         out[0] = address;
-        out[1] = 0xF3;
-        out[2] = 0xAB;
+        out[1] = ZdtProtocol::Function::ENABLE;
+        out[2] = ZdtProtocol::Sub::ENABLE_AB;
         out[3] = enable ? 1 : 0;
         out[4] = 0;
         return finish(out, 5, checksumMode);
@@ -109,8 +135,8 @@ namespace MotorDrivers {
             return 0;
         }
         out[0] = address;
-        out[1] = 0xFE;
-        out[2] = 0x98;
+        out[1] = ZdtProtocol::Function::STOP;
+        out[2] = ZdtProtocol::Sub::STOP_98;
         out[3] = 0;
         return finish(out, 4, checksumMode);
     }
@@ -120,8 +146,8 @@ namespace MotorDrivers {
             return 0;
         }
         out[0] = address;
-        out[1] = 0x0A;
-        out[2] = 0x6D;
+        out[1] = ZdtProtocol::Function::ZERO_POSITION;
+        out[2] = ZdtProtocol::Sub::ZERO_6D;
         return finish(out, 3, checksumMode);
     }
 
@@ -130,8 +156,8 @@ namespace MotorDrivers {
             return 0;
         }
         out[0] = address;
-        out[1] = 0xFF;
-        out[2] = 0x66;
+        out[1] = ZdtProtocol::Function::SYNC;
+        out[2] = ZdtProtocol::Sub::SYNC_66;
         return finish(out, 3, checksumMode);
     }
 
@@ -156,12 +182,12 @@ namespace MotorDrivers {
             if (capacity < 13) {
                 return 0;
             }
-            const uint16_t velocity = std::min<uint16_t>(speed_rpm, 3000);
+            const uint16_t velocity = std::min<uint16_t>(speed_rpm, uint16_t(ZdtProtocol::Limits::SPEED_RPM_MAX));
             out[0] = address;
-            out[1] = 0xFD;
+            out[1] = ZdtProtocol::Function::POSITION;
             out[2] = negative ? 1 : 0;
             put16(out + 3, velocity);
-            out[5] = uint8_t(std::min<uint32_t>(accel, 255u));  // Emm ramp setting
+            out[5] = uint8_t(std::min<uint32_t>(accel, uint32_t(ZdtProtocol::Limits::ACCEL_EMM_MAX)));  // Emm ramp setting
             put32(out + 6, magnitude);
             out[10] = position_mode;  // relative to the previous target position by default
             out[11] = 0;              // do not defer with the multi-machine sync flag
@@ -175,7 +201,8 @@ namespace MotorDrivers {
         if (capacity < 16) {
             return 0;
         }
-        double signedAngle = (negative ? -1.0 : 1.0) * (double(magnitude) * 3600.0 / double(counts_per_rev));
+        double signedAngle = (negative ? -1.0 : 1.0) *
+                             (double(magnitude) * double(ZdtProtocol::Encoding::X_POSITION_UNITS_PER_REV) / double(counts_per_rev));
         if (angle_residual) {
             signedAngle += *angle_residual;
         }
@@ -188,9 +215,9 @@ namespace MotorDrivers {
         if (xMagnitude > 0xFFFFFFFFull) {
             return 0;
         }
-        const uint16_t velocity01 = uint16_t(std::min<uint32_t>(uint32_t(speed_rpm) * 10u, 30000u));
+        const uint16_t velocity01 = uint16_t(std::min<uint32_t>(uint32_t(speed_rpm) * 10u, uint32_t(ZdtProtocol::Limits::X_SPEED_01RPM_MAX)));
         out[0]  = address;
-        out[1]  = 0xFD;
+        out[1]  = ZdtProtocol::Function::POSITION;
         out[2]  = xNegative ? 1 : 0;
         put16(out + 3, accel);  // X firmware: RPM/s, sent as an absolute value
         put16(out + 5, accel);  // deceleration in RPM/s
@@ -235,13 +262,13 @@ namespace MotorDrivers {
         }
         // 0x02 = command accepted; 0x9F = motion/zero completed.  Some
         // Response modes (Reached/Both) return 9F for position commands.
-        return data[1] == 0x02 || data[1] == 0x9F;
+        return data[1] == ZdtProtocol::Status::ACK_OK || data[1] == ZdtProtocol::Status::ACK_REACHED;
     }
 
     bool ZdtProtocol::parse_version(const uint8_t* data, size_t len, VersionInfo& out) {
         // Serial: Addr 1F FW_Ver(2) HW_Series/HW_Type/HW_Ver(2) 6B
         // CAN data:      1F FW_Ver(2) HW_Series/HW_Type/HW_Ver(2) 6B
-        if (!data || len != 6 || data[0] != 0x1F || data[5] != 0x6B) {
+        if (!data || len != 6 || data[0] != ZdtProtocol::Function::READ_VERSION || data[5] != ZdtProtocol::Status::CHECKSUM_FIXED) {
             return false;
         }
         out.firmware        = uint16_t((uint16_t(data[1]) << 8) | data[2]);
@@ -257,16 +284,18 @@ namespace MotorDrivers {
                                      size_t         len,
                                      uint32_t       counts_per_rev,
                                      int32_t&       counts) {
-        if (!data || len < 6 || data[0] != 0x36 || counts_per_rev == 0) {
+        if (!data || len < 6 || data[0] != ZdtProtocol::Function::READ_POSITION || counts_per_rev == 0) {
             return false;
         }
         const bool     negative = data[1] != 0;
         const uint32_t raw      = get32(data + 2);
         int64_t        value    = 0;
         if (firmware == ZdtFirmware::Emm) {
-            value = int64_t((uint64_t(raw) * counts_per_rev + 32768u) / 65536u);
+            value = int64_t((uint64_t(raw) * counts_per_rev + ZdtProtocol::Encoding::EMM_ROUND) /
+                            ZdtProtocol::Encoding::EMM_POSITION_UNITS_PER_REV);
         } else {
-            value = int64_t((uint64_t(raw) * counts_per_rev + 1800u) / 3600u);
+            value = int64_t((uint64_t(raw) * counts_per_rev + ZdtProtocol::Encoding::X_ROUND) /
+                            ZdtProtocol::Encoding::X_POSITION_UNITS_PER_REV);
         }
         if (negative) {
             value = -value;

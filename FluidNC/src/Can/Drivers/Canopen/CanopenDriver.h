@@ -2,6 +2,14 @@
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
 /*
+    METADATA
+    Vendor:                   CAN in Automation (CiA), vendor independent
+    Driver:                   CANopen command facade
+    Protocol:                 CiA301 / CiA402 standard defaults
+    Firmware model:           any compliant CANopen drive; NodeConfig overrides
+    Protocol header:          Can/Protocols/Standard/Canopen/CanopenProtocol.h
+    Verification status:      standard implementation; not hardware-verified.
+
     CanDriver implementation for the standard CANopen (CiA301) / CiA402 drive
     profile.
 

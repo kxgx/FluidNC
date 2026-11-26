@@ -90,13 +90,13 @@ TEST(Pd42s1Protocol, DeterminesResponseLength) {
     const uint8_t shortFrame[] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION };
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(shortFrame, sizeof(shortFrame)), 0u);
 
-    const uint8_t badHeader[] = { 0x00, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::STATUS_OK };
+    const uint8_t badHeader[] = { 0x00, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::Status::OK };
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(badHeader, sizeof(badHeader)), SIZE_MAX);
 
-    const uint8_t position[] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::STATUS_OK };
+    const uint8_t position[] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::Status::OK };
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(position, sizeof(position)), 10u);
 
-    const uint8_t version[] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_VERSION, Pd42s1Protocol::STATUS_OK };
+    const uint8_t version[] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_VERSION, Pd42s1Protocol::Status::OK };
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(version, sizeof(version)), 8u);
 
     const uint8_t error[] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_POSITION_MODE, 0xE4 };
@@ -104,7 +104,7 @@ TEST(Pd42s1Protocol, DeterminesResponseLength) {
 }
 
 TEST(Pd42s1Protocol, ParsesVersionResponse) {
-    uint8_t frame[8] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_VERSION, Pd42s1Protocol::STATUS_OK, 0x0A, 0x0B };
+    uint8_t frame[8] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_VERSION, Pd42s1Protocol::Status::OK, 0x0A, 0x0B };
     finish_response(frame, sizeof(frame));
 
     EXPECT_TRUE(Pd42s1Protocol::valid_response(frame, sizeof(frame)));
@@ -117,7 +117,7 @@ TEST(Pd42s1Protocol, ParsesVersionResponse) {
 }
 
 TEST(Pd42s1Protocol, ParsesPositionResponse) {
-    uint8_t frame[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::STATUS_OK, 0x00, 0x00, 0x01, 0x00 };
+    uint8_t frame[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::Status::OK, 0x00, 0x00, 0x01, 0x00 };
     finish_response(frame, sizeof(frame));
 
     int32_t position = 0;
@@ -127,7 +127,7 @@ TEST(Pd42s1Protocol, ParsesPositionResponse) {
 
 TEST(Pd42s1Protocol, ParsesNegativePositionResponse) {
     // Two's complement 0xFFFFFF00 = -256.
-    uint8_t frame[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::STATUS_OK, 0xFF, 0xFF, 0xFF, 0x00 };
+    uint8_t frame[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POSITION, Pd42s1Protocol::Status::OK, 0xFF, 0xFF, 0xFF, 0x00 };
     finish_response(frame, sizeof(frame));
 
     int32_t position = 0;
@@ -136,14 +136,14 @@ TEST(Pd42s1Protocol, ParsesNegativePositionResponse) {
 }
 
 TEST(Pd42s1Protocol, ParsesEnableAck) {
-    uint8_t frame[7] = { 0xC5, 0x03, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, Pd42s1Protocol::STATUS_OK, 0x00 };
+    uint8_t frame[7] = { 0xC5, 0x03, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, Pd42s1Protocol::Status::OK, 0x00 };
     finish_response(frame, sizeof(frame));
 
     EXPECT_TRUE(Pd42s1Protocol::parse_ack(frame, sizeof(frame)));
 }
 
 TEST(Pd42s1Protocol, RejectsBadChecksum) {
-    uint8_t frame[7] = { 0xC5, 0x03, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, Pd42s1Protocol::STATUS_OK, 0x00 };
+    uint8_t frame[7] = { 0xC5, 0x03, Pd42s1Protocol::FUNC_SET_MOTOR_ENABLE, Pd42s1Protocol::Status::OK, 0x00 };
     finish_response(frame, sizeof(frame));
     frame[sizeof(frame) - 2] ^= 0xFF;
 
@@ -185,7 +185,7 @@ TEST(Pd42s1Protocol, BuildsClearStallCommand) {
 
 TEST(Pd42s1Protocol, ParsesClearStateAck) {
     // Manual example 4.4.12 response: C5 01 FB 01 C2 5C.
-    uint8_t frame[6] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_CLEAR_STATE, Pd42s1Protocol::STATUS_OK };
+    uint8_t frame[6] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_CLEAR_STATE, Pd42s1Protocol::Status::OK };
     finish_response(frame, sizeof(frame));
 
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(frame, sizeof(frame)), 6u);
@@ -195,7 +195,7 @@ TEST(Pd42s1Protocol, ParsesClearStateAck) {
 
 TEST(Pd42s1Protocol, ParsesMotorStatusByte) {
     // Manual example 4.3.13: C5 01 2C 01 01 F4 5C (status byte = 1, done).
-    uint8_t frame[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_STATUS, Pd42s1Protocol::STATUS_OK, 0x01 };
+    uint8_t frame[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_STATUS, Pd42s1Protocol::Status::OK, 0x01 };
     finish_response(frame, sizeof(frame));
 
     uint8_t value = 0xFF;
@@ -205,13 +205,13 @@ TEST(Pd42s1Protocol, ParsesMotorStatusByte) {
 }
 
 TEST(Pd42s1Protocol, ParsesStallAndEnableBytes) {
-    uint8_t stall[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_STALL, Pd42s1Protocol::STATUS_OK, 0x01 };
+    uint8_t stall[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_STALL, Pd42s1Protocol::Status::OK, 0x01 };
     finish_response(stall, sizeof(stall));
     uint8_t value = 0xFF;
     EXPECT_TRUE(Pd42s1Protocol::parse_byte_value(stall, sizeof(stall), Pd42s1Protocol::FUNC_READ_STALL, value));
     EXPECT_EQ(value, 1);
 
-    uint8_t enable[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_ENABLE, Pd42s1Protocol::STATUS_OK, 0x00 };
+    uint8_t enable[7] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_ENABLE, Pd42s1Protocol::Status::OK, 0x00 };
     finish_response(enable, sizeof(enable));
     EXPECT_TRUE(Pd42s1Protocol::parse_byte_value(enable, sizeof(enable), Pd42s1Protocol::FUNC_READ_ENABLE, value));
     EXPECT_EQ(value, 0);
@@ -219,7 +219,7 @@ TEST(Pd42s1Protocol, ParsesStallAndEnableBytes) {
 
 TEST(Pd42s1Protocol, ParsesSpeedAndPositionError) {
     // Manual 4.3.10: C5 01 29 01 00 1F 0F 5C -> 0x001F = 31 RPM.
-    uint8_t speed[8] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_SPEED, Pd42s1Protocol::STATUS_OK, 0x00, 0x1F };
+    uint8_t speed[8] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_SPEED, Pd42s1Protocol::Status::OK, 0x00, 0x1F };
     finish_response(speed, sizeof(speed));
     int16_t rpm = 0;
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(speed, sizeof(speed)), 8u);
@@ -227,7 +227,7 @@ TEST(Pd42s1Protocol, ParsesSpeedAndPositionError) {
     EXPECT_EQ(rpm, 31);
 
     // Manual 4.3.12: C5 01 2B 01 00 00 00 01 F3 5C -> position error 1.
-    uint8_t error[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POS_ERROR, Pd42s1Protocol::STATUS_OK, 0x00, 0x00, 0x00, 0x01 };
+    uint8_t error[10] = { 0xC5, 0x01, Pd42s1Protocol::FUNC_READ_POS_ERROR, Pd42s1Protocol::Status::OK, 0x00, 0x00, 0x00, 0x01 };
     finish_response(error, sizeof(error));
     int32_t err = 0;
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(error, sizeof(error)), 10u);
@@ -260,9 +260,9 @@ TEST(Pd42s1Protocol, BuildsSaveParamsCommand) {
 }
 
 TEST(Pd42s1Protocol, DeterminesLongParameterResponseLengths) {
-    uint8_t system[4] = { 0xC5, 0x01, 0x31, Pd42s1Protocol::STATUS_OK };
+    uint8_t system[4] = { 0xC5, 0x01, 0x31, Pd42s1Protocol::Status::OK };
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(system, sizeof(system)), 46u);
 
-    uint8_t driver[4] = { 0xC5, 0x01, 0x32, Pd42s1Protocol::STATUS_OK };
+    uint8_t driver[4] = { 0xC5, 0x01, 0x32, Pd42s1Protocol::Status::OK };
     EXPECT_EQ(Pd42s1Protocol::expected_response_length(driver, sizeof(driver)), 50u);
 }

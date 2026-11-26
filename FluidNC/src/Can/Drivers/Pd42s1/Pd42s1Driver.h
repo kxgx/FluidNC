@@ -2,6 +2,15 @@
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
 /*
+    METADATA
+    Vendor:                   ALIENTEK (正点原子)
+    Driver:                   PD42S1 CAN command facade
+    Protocol:                 PD42S1 CAN command dialect (manual V1.2)
+    Firmware model:           PD42S1 factory firmware
+    Protocol header:          Can/Protocols/Private/Pd42s1/Pd42s1Protocol.h
+    Verification status:      hardware exercised; protocol constants owned by
+                              the protocol header above.
+
     CanDriver implementation for the ALIENTEK (正点原子) PD42S1 integrated
     closed-loop stepper driver, in the "CAN" dialect of its serial protocol.
 
@@ -27,6 +36,7 @@
 
 #    include "Can/CanBus.h"
 #    include "Can/CanDriver.h"
+#    include "Can/Protocols/Private/Pd42s1/Pd42s1Protocol.h"
 
 #    include <cstddef>
 #    include <cstdint>
@@ -36,13 +46,11 @@ namespace Machine {
     public:
         explicit Pd42s1Driver(CanBus* bus) : _bus(bus) {}
 
-        // Fixed 29-bit extended CAN identifier used for frames sent from the
-        // controller to a PD42S1.  The vendor's CAN examples use 0x1000 and the
-        // driver only accepts IDs in 0x1000..0x100F.  This used to be the
-        // can.command_id setting; it is now a protocol constant owned by this
-        // driver.  Pd42s1Protocol::CAN_COMMAND_ID exposes the same value to the
-        // shared framing/motion code.
-        static constexpr uint32_t CAN_COMMAND_ID = 0x1000;
+        // Fixed 29-bit command identifier used from controller to PD42S1
+        // (0x1000).  Responses use the vendor's fixed 0x1 identifier; this
+        // driver currently correlates by the address byte in the payload.
+        // The value is owned by Pd42s1Protocol::CAN_COMMAND_ID.
+        static constexpr uint32_t CAN_COMMAND_ID = MotorDrivers::Pd42s1Protocol::CAN_COMMAND_ID;
 
         const char* driver_name() const override { return "pd42s1"; }
         CanProtocolClass protocol_class() const override { return CanProtocolClass::Private; }

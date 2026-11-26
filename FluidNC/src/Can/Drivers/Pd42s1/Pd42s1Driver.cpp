@@ -135,7 +135,7 @@ namespace Machine {
             if (expected != 0 && total >= expected) {
                 if (total == expected && Pd42s1Protocol::valid_response(response, total) && response[1] == request[1] &&
                     response[2] == request[2]) {
-                    if (total == 6 && response[3] >= 0xE1 && response[3] <= 0xE6) {
+                    if (total == 6 && Pd42s1Protocol::Status::is_error_code(response[3])) {
                         // Addressed command error (not a stale frame).
                         _bus->flush_receive();
                         _bus->flush_transmit();
@@ -249,8 +249,7 @@ namespace Machine {
     }
 
     bool Pd42s1Driver::auto_configure_drivers() {
-        static const uint32_t bauds[] = { 125000, 250000, 500000, 1000000 };
-        const uint32_t        target  = _bus->baud();
+        const uint32_t target = _bus->baud();
 
         // This routine must never broadcast a baud-rate or save command.  A
         // broadcast has no acknowledgement, so one driver that misses the
@@ -280,7 +279,8 @@ namespace Machine {
         // target rate using an addressed 0x68 command.  Echo is enabled at
         // each configured address first so a driver that previously had echo
         // disabled can answer version probes.
-        for (uint32_t rate : bauds) {
+        for (uint16_t kbps : Pd42s1Protocol::Limits::SUPPORTED_BAUD_KBPS) {
+            const uint32_t rate = uint32_t(kbps) * 1000u;
             if (!_bus->install_transport(rate)) {
                 continue;
             }
@@ -679,9 +679,8 @@ namespace Machine {
             return 0;
         }
 
-        static const uint32_t bauds[]    = { 125000, 250000, 500000, 1000000 };
-        const uint32_t        configured = _bus->baud();
-        int                   total      = 0;
+        const uint32_t configured = _bus->baud();
+        int            total      = 0;
 
         // Stop the worker and release the bus; no client transaction may run
         // while the driver is reinstalled at the different bit rates.
@@ -691,7 +690,8 @@ namespace Machine {
 
         {
             CanBus::Lock lock(*_bus);
-            for (uint32_t baud : bauds) {
+            for (uint16_t kbps : Pd42s1Protocol::Limits::SUPPORTED_BAUD_KBPS) {
+                const uint32_t baud = uint32_t(kbps) * 1000u;
                 if (!_bus->install_transport(baud)) {
                     log_error("CAN scan: cannot install driver at " << baud << " baud");
                     continue;
@@ -879,11 +879,11 @@ namespace Machine {
     bool Pd42s1Driver::read_driver_config(uint8_t address, uint16_t& can_baud_kbps, uint8_t& echo, uint8_t& mode) {
         uint8_t request[Pd42s1Protocol::MAX_FRAME_LEN];
         uint8_t response[Pd42s1Protocol::MAX_FRAME_LEN];
-        size_t  len = Pd42s1Protocol::build_read_command(address, 0x32, request, sizeof(request));
+        size_t  len = Pd42s1Protocol::build_read_command(address, Pd42s1Protocol::FUNC_READ_DRIVER_PARAMS, request, sizeof(request));
         for (int attempt = 0; attempt < 3; ++attempt) {
             size_t responseLen = 0;
-            if (transact(request, len, response, sizeof(response), responseLen, 300) && responseLen == 50 && response[2] == 0x32 &&
-                response[3] == Pd42s1Protocol::STATUS_OK) {
+            if (transact(request, len, response, sizeof(response), responseLen, Pd42s1Protocol::Timing::TRANSACTION_TIMEOUT_MS) && responseLen == Pd42s1Protocol::RESP_LEN_DRIVER_PARAMS && response[2] == Pd42s1Protocol::FUNC_READ_DRIVER_PARAMS &&
+                response[3] == Pd42s1Protocol::Status::OK) {
                 mode          = response[4];
                 echo          = response[5];
                 can_baud_kbps = uint16_t((uint16_t(response[10]) << 8) | response[11]);
@@ -1110,7 +1110,7 @@ namespace Machine {
             return false;
         }
         CanBus::Lock lock(*_bus);
-        bool ok = transact(request, len, response, sizeof(response), responseLen, 300) &&
+        bool ok = transact(request, len, response, sizeof(response), responseLen, Pd42s1Protocol::Timing::TRANSACTION_TIMEOUT_MS) &&
                   Pd42s1Protocol::parse_ack(response, responseLen);
         can_log_info("CAN move: address " << int(address) << " from " << current << " to " << target << " (delta " << delta << ") "
                                           << (ok ? "ok" : "failed"));
@@ -1208,7 +1208,7 @@ namespace Machine {
             for (int attempt = 0; attempt < 5 && !off; ++attempt) {
                 size_t len         = Pd42s1Protocol::build_enable_command(addresses[i], false, request, sizeof(request));
                 size_t responseLen = 0;
-                if (!transact(request, len, response, sizeof(response), responseLen, 300) ||
+                if (!transact(request, len, response, sizeof(response), responseLen, Pd42s1Protocol::Timing::TRANSACTION_TIMEOUT_MS) ||
                     !Pd42s1Protocol::parse_ack(response, responseLen)) {
                     vTaskDelay(pdMS_TO_TICKS(10));
                     continue;
@@ -1217,7 +1217,7 @@ namespace Machine {
                 len = Pd42s1Protocol::build_read_command(addresses[i], Pd42s1Protocol::FUNC_READ_ENABLE, request, sizeof(request));
                 uint8_t state = 0xFF;
                 responseLen   = 0;
-                if (transact(request, len, response, sizeof(response), responseLen, 300) &&
+                if (transact(request, len, response, sizeof(response), responseLen, Pd42s1Protocol::Timing::TRANSACTION_TIMEOUT_MS) &&
                     Pd42s1Protocol::parse_byte_value(response, responseLen, Pd42s1Protocol::FUNC_READ_ENABLE, state) && state == 1) {
                     off = true;
                 } else {

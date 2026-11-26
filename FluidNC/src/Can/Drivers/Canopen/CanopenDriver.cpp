@@ -9,6 +9,7 @@
 
 #    include "Can/CanDriverRegistry.h"
 #    include "Can/Protocols/Standard/Canopen/CanopenProtocol.h"
+#    include "Can/Drivers/Canopen/CanopenClient.h"
 #    include "Logging.h"
 
 #    include <Arduino.h>

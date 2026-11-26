@@ -36,8 +36,10 @@ Motors/<vendor>Motor.*
 ## Adding a vendor
 
 1. Choose `Standard` or `Private`.
-2. For `Private`, add `Can/Protocols/Private/<vendor>/<Vendor>Protocol.*` and
-   unit tests.
+2. For `Private`, copy `Can/Protocols/PROTOCOL_TEMPLATE.h` to
+   `Can/Protocols/Private/<vendor>/<Vendor>Protocol.*`; fill the metadata block
+   and all protocol limits before writing the implementation.  See
+   [`Protocols/README.md`](Protocols/README.md).  Add unit tests.
 3. Add `Can/Drivers/<vendor>/<Vendor>Driver.*` implementing `CanDriver` and
    `protocol_class()`.  Register it with
    `CanDriverRegistration("<vendor>", factory)`.

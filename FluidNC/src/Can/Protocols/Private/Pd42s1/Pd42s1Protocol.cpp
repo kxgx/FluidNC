@@ -4,6 +4,29 @@
 #include "Pd42s1Protocol.h"
 
 namespace MotorDrivers {
+    const char* Pd42s1Protocol::Status::error_code_name(uint8_t code) {
+        switch (code) {
+            case ERROR_FRAME_TOO_SHORT:
+                return "frame too short";
+            case ERROR_BAD_HEADER:
+                return "bad frame header";
+            case ERROR_BAD_TAIL:
+                return "bad frame tail";
+            case ERROR_CHECKSUM:
+                return "checksum error";
+            case ERROR_UNSUPPORTED:
+                return "unsupported function";
+            case ERROR_INVALID_DATA:
+                return "invalid data";
+            default:
+                return "unknown error";
+        }
+    }
+
+    bool Pd42s1Protocol::Status::is_error_code(uint8_t code) {
+        return code >= ERROR_FRAME_TOO_SHORT && code <= ERROR_INVALID_DATA;
+    }
+
     uint8_t Pd42s1Protocol::checksum(const uint8_t* data, size_t len) {
         uint8_t sum = 0;
         for (size_t i = 0; i < len; ++i) {
@@ -120,50 +143,50 @@ namespace MotorDrivers {
 
         uint8_t function = frame[2];
         uint8_t status   = frame[3];
-        if (status != STATUS_OK) {
+        if (status != Pd42s1Protocol::Status::OK) {
             // Every failed command answers with just the status byte.
-            return 6;
+            return RESP_LEN_STATUS_ONLY;
         }
 
         switch (function) {
             case FUNC_READ_VERSION:
-                return 8;  // status + firmware version + hardware version
+                return RESP_LEN_VERSION;
             case FUNC_READ_POSITION:
             case FUNC_READ_PULSES:
             case FUNC_READ_POS_ERROR:
-                return 10;  // status + 4-byte value
+                return RESP_LEN_INT32_VALUE;
             case FUNC_READ_SPEED:
-                return 8;  // status + 2-byte signed speed
+                return RESP_LEN_INT16_VALUE;
             case FUNC_READ_STATUS:
-                return 7;  // status + 1-byte motor status
+                return RESP_LEN_BYTE_VALUE;
             case FUNC_READ_STALL:
             case FUNC_READ_ENABLE:
             case FUNC_READ_IN_POSITION:
-                return 7;  // status + 1-byte flag
+                return RESP_LEN_BYTE_VALUE;
             case FUNC_SET_MOTOR_ENABLE:
-                return 7;  // status + 1-byte enable state
+                return RESP_LEN_BYTE_VALUE;
             case FUNC_SET_ECHO:
-                return 7;  // status + 1-byte echo state
+                return RESP_LEN_BYTE_VALUE;
             case FUNC_SET_GROUP_ADDRESS:
-                return 7;  // status + 1-byte group address
+                return RESP_LEN_BYTE_VALUE;
             case FUNC_CLEAR_STALL:
             case FUNC_CLEAR_STATE:
             case FUNC_STOP_NOW:
             case FUNC_ZERO_POSITION:
             case FUNC_SAVE_PARAMS:
-                return 6;  // status only
+                return RESP_LEN_STATUS_ONLY;
             case FUNC_SET_CAN_BAUD:
-                return 8;  // status + 2-byte bit rate in kbps
-            case 0x31:
-                return 46;  // status + 41-byte system parameter block
-            case 0x32:
-                return 50;  // status + 45-byte driver parameter block
+                return RESP_LEN_CAN_BAUD;
+            case FUNC_READ_SYSTEM_PARAMS:
+                return RESP_LEN_SYSTEM_PARAMS;
+            case FUNC_READ_DRIVER_PARAMS:
+                return RESP_LEN_DRIVER_PARAMS;
             case FUNC_SET_POSITION_PID:
-                return 18;  // status + 12-byte PID payload + checksum/tail/head
+                return RESP_LEN_PID;
             case FUNC_SET_MAX_TORQUE:
-                return 8;   // status + 2-byte current payload + framing
+                return RESP_LEN_TORQUE;
             case FUNC_POSITION_MODE:
-                return 6;  // status only
+                return RESP_LEN_STATUS_ONLY;
             default:
                 // The length of an unmodelled response is unknown; the caller
                 // must fall back to a timeout.
@@ -182,7 +205,7 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_version(const uint8_t* frame, size_t len, uint8_t& firmware_version, uint8_t& hardware_version) {
-        if (len != 8 || frame[2] != FUNC_READ_VERSION || !valid_response(frame, len)) {
+        if (len != RESP_LEN_VERSION || frame[2] != FUNC_READ_VERSION || !valid_response(frame, len)) {
             return false;
         }
         firmware_version = frame[4];
@@ -195,7 +218,7 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_int32_value(const uint8_t* frame, size_t len, uint8_t function, int32_t& value) {
-        if (len != 10 || frame[2] != function || !valid_response(frame, len)) {
+        if (len != RESP_LEN_INT32_VALUE || frame[2] != function || !valid_response(frame, len)) {
             return false;
         }
         value = int32_t((uint32_t(frame[4]) << 24) | (uint32_t(frame[5]) << 16) | (uint32_t(frame[6]) << 8) | uint32_t(frame[7]));
@@ -203,7 +226,7 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_int16_value(const uint8_t* frame, size_t len, uint8_t function, int16_t& value) {
-        if (len != 8 || frame[2] != function || !valid_response(frame, len)) {
+        if (len != RESP_LEN_INT16_VALUE || frame[2] != function || !valid_response(frame, len)) {
             return false;
         }
         value = int16_t((uint16_t(frame[4]) << 8) | uint16_t(frame[5]));
@@ -215,7 +238,7 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_byte_value(const uint8_t* frame, size_t len, uint8_t function, uint8_t& value) {
-        if (len != 7 || frame[2] != function || !valid_response(frame, len)) {
+        if (len != RESP_LEN_BYTE_VALUE || frame[2] != function || !valid_response(frame, len)) {
             return false;
         }
         value = frame[4];
@@ -223,6 +246,6 @@ namespace MotorDrivers {
     }
 
     bool Pd42s1Protocol::parse_ack(const uint8_t* frame, size_t len) {
-        return valid_response(frame, len) && frame[3] == STATUS_OK;
+        return valid_response(frame, len) && frame[3] == Pd42s1Protocol::Status::OK;
     }
 }
