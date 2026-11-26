@@ -2,6 +2,8 @@
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
 #include "WebClient.h"
+#include "Protocol.h"
+#include "Serial.h"
 #include "Driver/Console.h"
 #include <ESPAsyncWebServer.h>  // RESPONSE_TRY_AGAIN
 #include <algorithm>
@@ -97,10 +99,38 @@ namespace WebUI {
         xSemaphoreGive(_lock);
 
         if (n) {
+            _waitingForOutput = false;
             return n;
         }
-        if (_done.load() || is_closing() || _aborted.load()) {
-            return 0;  // end of stream: command finished, channel closing, or output truncated
+        if (is_closing() || _aborted.load()) {
+            return 0;  // channel closing or output truncated
+        }
+        // Command output can be delivered through two paths:
+        //   * log_*() broadcasts: ref lives on allChannels;
+        //   * log_stream(out,...)/out(): ref lives on this WebClient.
+        // _done is latched by ack() before those queued refs have necessarily
+        // been drained, so ending here would return a 0-byte response.  Wait
+        // in the async HTTP filler (TRY_AGAIN) until both ref counts reach 0.
+        if (pending_log_refs() || allChannels.pending_log_refs()) {
+            // Backstop only after the command has actually completed.  While a
+            // slow/verbose command is still running, never truncate it just
+            // because unrelated broadcast logs keep the global refs non-zero.
+            if (_done.load()) {
+                if (!_waitingForOutput) {
+                    _waitingForOutput = true;
+                    _emptyWaitStart  = xTaskGetTickCount();
+                } else if (xTaskGetTickCount() - _emptyWaitStart >= pdMS_TO_TICKS(2000)) {
+                    _aborted.store(true);
+                    return 0;
+                }
+            } else {
+                _waitingForOutput = false;
+            }
+            return RESPONSE_TRY_AGAIN;
+        }
+        _waitingForOutput = false;
+        if (_done.load()) {
+            return 0;  // command finished and all queued output was delivered
         }
         // _silent alone is not end-of-stream - a silent command still runs to
         // completion and its ack() latches _done.

@@ -809,10 +809,6 @@ namespace WebUI {
         if (request->method() == HTTP_GET) {
             WebClient* webClient = new WebClient();
             webClient->attachWS(silent);
-            webClient->deliverCommand(line);
-            // Registered like any other channel; the polling task picks up the
-            // queued command line and runs it through execute_line().
-            allChannels.registration(webClient);
             response = request->beginChunkedResponse("", [webClient, request](uint8_t* buffer, size_t maxLen, size_t total) mutable -> size_t {
                 // The method can change before the end... not good
                 //if(request->method() != HTTP_GET)
@@ -830,6 +826,17 @@ namespace WebUI {
                     log_error("Could not queue HTTP command channel for deletion, leaking it");
                 }
             });
+            // Register the channel and start the chunked response BEFORE
+            // delivering the command.  Otherwise the polling task can execute
+            // the line before this WebClient is registered, so the command
+            // output is written nowhere and the client sees an immediate 0-byte
+            // response.  Starting the response first also lets the AsyncTCP
+            // callback drain large reports while they are being produced.
+            allChannels.registration(webClient);
+            response->addHeader(T_Cache_Control, T_no_cache);
+            request->send(response);
+            webClient->deliverCommand(line);
+            return;
         } else
             response = request->beginResponse(200, "", "");
         response->addHeader(T_Cache_Control, T_no_cache);

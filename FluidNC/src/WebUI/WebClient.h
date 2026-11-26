@@ -71,6 +71,8 @@ namespace WebUI {
         std::atomic<bool> _silent { false };   // discard output
         std::atomic<bool> _done { false };     // command finished (or channel closing)
         std::atomic<bool> _aborted { false };  // output dropped: a client stopped draining
+        TickType_t        _emptyWaitStart = 0; // filler backstop for pending log refs
+        bool              _waitingForOutput = false;
 
         // Bounded output ring.  The point of the streaming design is to *not*
         // hold a whole [ESP400] response; when full, write() briefly waits for
