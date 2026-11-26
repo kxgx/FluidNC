@@ -32,6 +32,13 @@ namespace Machine {
         bool isCodeBoundary(char c) {
             return c == '\0' || isalpha(uint8_t(c));
         }
+
+        // Marlin's Lumen firmware warns for the eight reserved 7-bit I2C addresses
+        // (0..7); use the same valid range so a host cannot address a reserved
+        // device.
+        bool validI2cAddress(int address) {
+            return address >= 8 && address <= 127;
+        }
     }
 
     bool LumenCompat::startsWithCode(const char* line, const char* code) {
@@ -261,18 +268,23 @@ namespace Machine {
             const uint8_t g = present['U' - 'A'] ? uint8_t(value['U' - 'A'] & 0xFF) : 0;
             const uint8_t b = present['B' - 'A'] ? uint8_t(value['B' - 'A'] & 0xFF) : 0;
 
-            // Marlin treats an omitted P as "keep the current brightness",
-            // and an omitted color word as zero.  M150 P0/P255 alone is a
-            // brightness-only command and must not erase the color buffer.
+            // Stock LumenPnP Marlin treats an omitted P as "keep the
+            // current brightness" and an omitted color word as zero.  A
+            // brightness-only M150 (for example M150 P0 or M150 P255) therefore
+            // writes black at that brightness, matching the reference firmware.
             if (!hasColor && !keep) {
-                if (hasBrightness) {
-                    target.setBrightness(brightness);
+                if (index >= 0) {
+                    // M150 I<n> with no color words clears only that pixel.
+                    target.setPixel(uint8_t(index), 0, 0, 0);
+                    if (hasBrightness) {
+                        target.setBrightness(brightness);
+                    }
                     if (!target.show()) {
                         ledOk = false;
                     }
-                } else if (index >= 0) {
-                    // M150 I<n> with no color words clears only that pixel.
-                    target.setPixel(uint8_t(index), 0, 0, 0);
+                } else if (hasBrightness) {
+                    target.setColor(0, 0, 0);
+                    target.setBrightness(brightness);
                     if (!target.show()) {
                         ledOk = false;
                     }
@@ -424,7 +436,12 @@ namespace Machine {
 
         if (present['A' - 'A']) {
             const int address = value['A' - 'A'];
-            if (address < 0 || address > 127) {
+            if (!validI2cAddress(address)) {
+                // Never leave the previous address armed after a rejected A
+                // word; the next M260 B/S sequence must not write to the old
+                // device.
+                _i2cAddress = 0;
+                _i2cLength  = 0;
                 return Error::InvalidValue;
             }
             _i2cAddress = uint8_t(address);
@@ -471,7 +488,7 @@ namespace Machine {
         const int address = value['A' - 'A'];
         const int count   = value['B' - 'A'];
         const int style   = present['S' - 'A'] ? value['S' - 'A'] : 0;
-        if (address < 0 || address > 127 || count <= 0 || count > int(sizeof(_i2cBuffer))) {
+        if (!validI2cAddress(address) || count <= 0 || count > int(sizeof(_i2cBuffer))) {
             return Error::InvalidValue;
         }
         if (_i2cBus >= MAX_N_I2C || !config->_i2c[_i2cBus]) {
@@ -494,8 +511,13 @@ namespace Machine {
             channel.println(v);
         } else if (style == 1) {
             channel.print("data:");
+            static const char hex[] = "0123456789ABCDEF";
             for (int i = 0; i < count; ++i) {
-                channel.print(data[i], HEX);
+                if (i) {
+                    channel.print(' ');
+                }
+                channel.print(hex[data[i] >> 4]);
+                channel.print(hex[data[i] & 0x0F]);
             }
             channel.println();
         } else {
