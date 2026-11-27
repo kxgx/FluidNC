@@ -42,6 +42,9 @@ namespace Machine {
         uint8_t _count       = 8;
         bool    _startupTest = false;
         uint8_t  _i2cBus     = 0;
+        // Marlin Z_AFTER_HOMING: absolute Z to move to after G28 homes Z.
+        // The stock LumenPnP OpenPnP profile assumes Z=31.5 at home.
+        float _zAfterHoming = 31.5f;
 
     private:
         Error ledCommand(const char* line, int codeLen, Channel& channel);
@@ -51,6 +54,7 @@ namespace Machine {
         Error i2cSendCommand(const char* line, int codeLen);
         Error i2cRequestCommand(const char* line, int codeLen, Channel& channel);
         Error g28Command(const char* line, Channel& channel);
+        Error zAfterHomingMove(Channel& channel);
 
         static bool startsWithCode(const char* line, const char* code);
         static bool parseParams(const char* line, int offset, int32_t value[26], bool present[26]);

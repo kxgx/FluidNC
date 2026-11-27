@@ -600,6 +600,14 @@
    "tuning": "typical",
    "description": "Run the stock top-then-bottom red/green/blue startup test (1.5 s each).\n"
   },
+  "z_after_homing_mm": {
+   "type": "float",
+   "min": 0.0,
+   "max": 10000.0,
+   "default": "31.5",
+   "tuning": "per-machine",
+   "description": "Marlin Z_AFTER_HOMING.  After G28 homes Z, move to this absolute machine Z before reporting ok.  Set 0 to disable.\n"
+  },
   "i2c_bus": {
    "type": "integer",
    "min": 0,

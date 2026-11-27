@@ -404,7 +404,10 @@ namespace Machine {
             log_info("M106/M107: no user_outputs configured");
             return Error::InvalidValue;
         }
-        config->_userOutputs->setDigital(size_t(index), enabled);
+        if (!config->_userOutputs->setDigital(size_t(index), enabled)) {
+            log_info("M106/M107: output " << index << " is not configured");
+            return Error::InvalidValue;
+        }
         return Error::Ok;
     }
 
@@ -571,6 +574,9 @@ namespace Machine {
             log_info("G28: homing ignored in check mode");
             return Error::SystemGcLock;
         }
+        if (state_is(State::Critical) || state_is(State::ConfigAlarm)) {
+            return Error::SystemGcLock;
+        }
         std::string axes;
         for (const char* p = line + 3; *p && *p != ';'; ++p) {
             if (isspace(uint8_t(*p))) {
@@ -586,7 +592,42 @@ namespace Machine {
         if (!axes.empty() && !Axes::namesToMask(axes.c_str(), mask)) {
             return Error::InvalidValue;
         }
-        return home_axes(mask, channel);
+        Error err = home_axes(mask, channel);
+        if (err != Error::Ok) {
+            return err;
+        }
+
+        // Marlin runs do_move_after_z_homing() only when Z was part of this
+        // G28 and was actually homed.  cycle 0 axes are not part of $H/all.
+        bool zHomed = false;
+        if (mask == Machine::Homing::AllCycles) {
+            auto homing = Machine::Axes::_axis[Z_AXIS] ? Machine::Axes::_axis[Z_AXIS]->_homing : nullptr;
+            zHomed     = homing && homing->_cycle >= 1;
+        } else {
+            zHomed = bitnum_is_true(mask, Z_AXIS);
+        }
+        zHomed = zHomed && Machine::Homing::axis_is_homed(Z_AXIS);
+        if (zHomed && _zAfterHoming > 0.0f) {
+            return zAfterHomingMove(channel);
+        }
+        return Error::Ok;
+    }
+
+    Error LumenCompat::zAfterHomingMove(Channel& channel) {
+        if (sys.abort() || state_is(State::Alarm) || state_is(State::Critical)) {
+            return Error::SystemGcLock;
+        }
+        char line[64];
+        snprintf(line, sizeof(line), "G21 G90 G53 G0 Z%.3f F3000", double(_zAfterHoming));
+        Error err = gc_execute_line(line, channel);
+        if (err != Error::Ok) {
+            return err;
+        }
+        protocol_buffer_synchronize();
+        if (sys.abort()) {
+            return Error::SystemGcLock;
+        }
+        return Error::Ok;
     }
 
     void LumenCompat::group(Configuration::HandlerBase& handler) {
@@ -616,6 +657,13 @@ namespace Machine {
         // @tuning typical
         // Run the stock top-then-bottom red/green/blue startup test (1.5 s each).
         handler.item("startup_test", _startupTest);
+
+        // @config z_after_homing_mm
+        // @default 31.5
+        // @tuning per-machine
+        // Marlin Z_AFTER_HOMING.  After G28 homes Z, move to this absolute
+        // machine Z before reporting ok.  Set 0 to disable.
+        handler.item("z_after_homing_mm", _zAfterHoming, 0.0f, 10000.0f);
 #if MAX_N_I2C
         // @config i2c_bus
         // @default 0

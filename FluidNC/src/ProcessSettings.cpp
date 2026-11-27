@@ -519,12 +519,38 @@ static Error home(AxisMask axisMask, Channel& out) {
         return Error::SystemGcLock;
     }
 
+    // Marlin starts G28 with planner.synchronize(); do the same so a homing
+    // cycle can never overlap queued moves from the same command stream.
+    protocol_buffer_synchronize();
+    if (sys.abort()) {
+        return Error::SystemGcLock;
+    }
+
     Machine::Homing::run_cycles(axisMask);
 
     do {
         protocol_execute_realtime();
+        if (sys.abort()) {
+            return Error::SystemGcLock;
+        }
     } while (state_is(State::Homing));
 
+    // Homing can end in Alarm because axes outside this request (for example
+    // A/B, which have no homing cycle) are still unhomed.  Build the set of
+    // axes that all-cycle homing will actually run; cycle 0 axes are excluded.
+    AxisMask requested = axisMask;
+    if (axisMask == Machine::Homing::AllCycles) {
+        requested = 0;
+        for (axis_t axis = X_AXIS; axis < Axes::_numberAxis; ++axis) {
+            auto homing = Axes::_axis[axis] ? Axes::_axis[axis]->_homing : nullptr;
+            if (homing && homing->_cycle >= 1) {
+                set_bitnum(requested, axis);
+            }
+        }
+    }
+    if (Machine::Homing::unhomed_axes() & requested) {
+        return Error::SystemGcLock;
+    }
     return Error::Ok;
 }
 Error home_axes(AxisMask axisMask, Channel& out) {
@@ -2083,10 +2109,11 @@ Error execute_line(const char* line, Channel& channel, AuthenticationLevel auth_
         return run_command_inline(line, channel, auth_level);
     }
     // Everything else is gcode. Block if in an alarm state or jog mode.
-    // Lumen G28 is Marlin's recovery homing command and must work from Alarm.
+    // Lumen G28 is Marlin's recovery homing command and may run from Alarm,
+    // but not from Critical/ConfigAlarm (hard limits, e-stop, bad config).
     const bool lumenG28 = config && config->_lumenCompat && config->_lumenCompat->configured() && lumen_g28_line(line);
-    if (state_is(State::ConfigAlarm) || state_is(State::Jog) ||
-        ((state_is(State::Alarm) || state_is(State::Critical)) && !lumenG28)) {
+    if (state_is(State::ConfigAlarm) || state_is(State::Critical) || state_is(State::Jog) ||
+        (state_is(State::Alarm) && !lumenG28)) {
         return Error::SystemGcLock;
     }
     if (!can_motion_ready() && !is_can_maintenance_line(line)) {
