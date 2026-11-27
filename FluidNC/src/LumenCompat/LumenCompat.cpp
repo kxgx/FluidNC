@@ -480,7 +480,10 @@ namespace Machine {
             int          result = config->_i2c[_i2cBus]->write(_i2cAddress, _i2cBuffer, length);
             _i2cLength = 0;
             if (result != int(length)) {
-                return Error::InvalidValue;
+                // Marlin's M260 completes normally even when the I2C device is
+                // absent; OpenPnP waits for "ok" and would otherwise time out
+                // during connect (e.g. before the vacuum sensor is soldered).
+                log_warn("M260: I2C write to " << int(_i2cAddress) << " failed: " << result);
             }
         }
         return Error::Ok;
@@ -514,7 +517,11 @@ namespace Machine {
         uint8_t data[sizeof(_i2cBuffer)];
         int     result = config->_i2c[_i2cBus]->read(uint8_t(address), data, size_t(count));
         if (result != count) {
-            return Error::InvalidValue;
+            // Marlin's M261 also completes with ok when the I2C device is
+            // absent and simply emits no data line.  Returning an error here
+            // makes OpenPnP's GcodeDriver wait for a missing ok.
+            log_warn("M261: I2C read from " << int(address) << " failed: " << result);
+            return Error::Ok;
         }
 
         if (style == 2 && count <= 2) {
