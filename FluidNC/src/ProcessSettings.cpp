@@ -2,6 +2,7 @@
 // Use of this source code is governed by a GPLv3 license that can be found in the LICENSE file.
 
 #include "Settings.h"
+#include "ProcessSettings.h"
 #include "Parameters.h"  // global_named_params
 
 #define CRASH_TEST
@@ -526,6 +527,10 @@ static Error home(AxisMask axisMask, Channel& out) {
 
     return Error::Ok;
 }
+Error home_axes(AxisMask axisMask, Channel& out) {
+    return home(axisMask, out);
+}
+
 static Error home_all(const char* value, AuthenticationLevel auth_level, Channel& out) {
     AxisMask requestedAxes = Machine::Homing::AllCycles;
     auto     retval        = Error::Ok;
@@ -2021,6 +2026,25 @@ static Error run_command_inline(const char* line, Channel& channel, Authenticati
     }
 }
 
+// Marlin G28 is the recovery/home command, so the Lumen compatibility layer
+// must be allowed through the Alarm/Critical G-code gate.  Normal FluidNC G28
+// (go to the stored G28 position) keeps the old gate behavior.
+static bool lumen_g28_line(const char* line) {
+    const char* p = line;
+    while (*p && isspace(uint8_t(*p))) {
+        ++p;
+    }
+    if (*p != 'G' && *p != 'g') {
+        return false;
+    }
+    ++p;
+    while (*p && isspace(uint8_t(*p))) {
+        ++p;
+    }
+    return p[0] == '2' && p[1] == '8' &&
+           (p[2] == '\0' || p[2] == ' ' || p[2] == '\t' || p[2] == ';' || p[2] == '*');
+}
+
 Error execute_line(const char* line, Channel& channel, AuthenticationLevel auth_level, bool on_protocol_task) {
     // Empty or comment line. For syncing purposes.
     if (line[0] == 0) {
@@ -2059,7 +2083,10 @@ Error execute_line(const char* line, Channel& channel, AuthenticationLevel auth_
         return run_command_inline(line, channel, auth_level);
     }
     // Everything else is gcode. Block if in an alarm state or jog mode.
-    if (state_is(State::Alarm) || state_is(State::Critical) || state_is(State::ConfigAlarm) || state_is(State::Jog)) {
+    // Lumen G28 is Marlin's recovery homing command and must work from Alarm.
+    const bool lumenG28 = config && config->_lumenCompat && config->_lumenCompat->configured() && lumen_g28_line(line);
+    if (state_is(State::ConfigAlarm) || state_is(State::Jog) ||
+        ((state_is(State::Alarm) || state_is(State::Critical)) && !lumenG28)) {
         return Error::SystemGcLock;
     }
     if (!can_motion_ready() && !is_can_maintenance_line(line)) {

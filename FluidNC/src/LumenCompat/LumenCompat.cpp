@@ -13,6 +13,9 @@
 #endif
 #include "Machine/MachineConfig.h"
 #include "Machine/UserOutputs.h"
+#include "Machine/Axes.h"
+#include "Machine/Homing.h"
+#include "ProcessSettings.h"
 
 #include <ctype.h>
 #include <cstdio>
@@ -187,7 +190,14 @@ namespace Machine {
             return Error::Ok;
         }
 
-        if (startsWithCode(line, "M150")) {
+        if (startsWithCode(line, "G28") && line[3] != '.') {
+        // Marlin/OpenPnP G28 homes; FluidNC G28 moves to the stored G28
+        // position.  The Lumen compatibility layer restores the Marlin
+        // semantic, including G28 X/Y/Z masks, and blocks until homing ends.
+        handled = true;
+        return g28Command(line, channel);
+    }
+    if (startsWithCode(line, "M150")) {
             handled = true;
             return ledCommand(line, kM150Len, channel);
         }
@@ -554,6 +564,29 @@ namespace Machine {
         }
         return Error::Ok;
 #endif
+    }
+
+    Error LumenCompat::g28Command(const char* line, Channel& channel) {
+        if (state_is(State::CheckMode)) {
+            log_info("G28: homing ignored in check mode");
+            return Error::SystemGcLock;
+        }
+        std::string axes;
+        for (const char* p = line + 3; *p && *p != ';'; ++p) {
+            if (isspace(uint8_t(*p))) {
+                continue;
+            }
+            if (isalpha(uint8_t(*p))) {
+                axes.push_back(char(toupper(uint8_t(*p))));
+            }
+            // Marlin G28 has no numeric axis values; ignore digits and
+            // anything else, matching its flag-like X/Y/Z words.
+        }
+        AxisMask mask = 0;
+        if (!axes.empty() && !Axes::namesToMask(axes.c_str(), mask)) {
+            return Error::InvalidValue;
+        }
+        return home_axes(mask, channel);
     }
 
     void LumenCompat::group(Configuration::HandlerBase& handler) {

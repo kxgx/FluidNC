@@ -50,6 +50,7 @@ namespace Machine {
         Error infoCommand(Channel& channel);
         Error i2cSendCommand(const char* line, int codeLen);
         Error i2cRequestCommand(const char* line, int codeLen, Channel& channel);
+        Error g28Command(const char* line, Channel& channel);
 
         static bool startsWithCode(const char* line, const char* code);
         static bool parseParams(const char* line, int offset, int32_t value[26], bool present[26]);
