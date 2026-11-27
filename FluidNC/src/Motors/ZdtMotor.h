@@ -70,21 +70,27 @@ namespace MotorDrivers {
             // Invert the direction of the streamed position deltas.
             handler.item("invert_direction", _invertDirection);
 
-            // @config speed_rpm
-            // @default 600
-            // @ignore_drift protocol header owns the symbolic default/limits
+            // @config write_microsteps
+            // @default false
             // @tuning per-machine
-            // Maximum following speed in RPM.  X42S free-protocol speed fields
-            // are limited to 3000 RPM, so values above that are rejected.
-            handler.item("speed_rpm", _speedRpm, 1, 3000);
+            // Explicit opt-in: write axis.microsteps to the ZDT driver's NVRAM
+            // (0x84, store=1) on the first sync.  Off by default because it
+            // changes persistent drive configuration.
+            handler.item("write_microsteps", _writeMicrosteps);
+
+            // @config speed_rpm
+            // @default 0
+            // @tuning per-machine
+            // Fixed-stream following speed in RPM.  0 derives the required
+            // value from the axis maximum feed (10% headroom in fixed mode).
+            handler.item("speed_rpm", _speedRpm, 0, 3000);
 
             // @config accel
-            // @default 80
-            // @ignore_drift protocol header owns the symbolic default/limits
+            // @default -1
             // @tuning per-machine
-            // Driver acceleration. For Emm this is the native 0..255 ramp
-            // setting; for X it is the native RPM/s value (0..65535).
-            handler.item("accel", _accel, 0, 65535);
+            // Driver acceleration. -1 derives it from the axis acceleration:
+            // Emm uses the native 0..255 ramp; X uses RPM/s (1..65535).
+            handler.item("accel", _accel, -1, 65535);
 
             // @config update_ms
             // @default 20
@@ -163,7 +169,14 @@ namespace MotorDrivers {
         bool           send_enable(bool enable);
         bool           send_stop();
         bool           send_move(int32_t delta_counts, uint16_t speed_rpm);
-        bool           transact(const uint8_t* request, size_t length, uint8_t function, uint8_t* response, size_t& response_len);
+        bool           write_driver_microsteps();
+        bool           read_driver_config(uint8_t* response, size_t& response_len);
+        bool           transact(const uint8_t* request,
+                                size_t         length,
+                                uint8_t        function,
+                                uint8_t*       response,
+                                size_t&        response_len,
+                                bool           expect_ack = true);
         void           report_motion_fault(const char* reason);
 
         Machine::CanBus* _bus = nullptr;
@@ -177,11 +190,14 @@ namespace MotorDrivers {
         std::string _speedSourceName = "fixed";
         int32_t  _countsPerRev = 0;  // 0 = derive from axis mechanics
         float    _countsPerStep = 1.0f;
-        int32_t  _speedRpm     = ZdtProtocol::Defaults::SPEED_RPM;
+        int32_t  _speedRpm     = 0;  // 0 = derive from axis max feed
         int32_t  _speedMarginPct = ZdtProtocol::Defaults::SPEED_MARGIN_PCT;
-        int32_t  _accel        = ZdtProtocol::Defaults::ACCEL_EMM;
+        int32_t  _accel        = -1;  // -1 = derive from axis acceleration
         uint32_t _updateMs     = ZdtProtocol::Defaults::UPDATE_MS;
         bool     _invertDirection = false;
+        int32_t  _driverMicrosteps = 0;  // 0 = leave the driver's 0x84 unchanged
+        bool     _microstepsApplied = false;
+        bool     _writeMicrosteps = false;  // explicit opt-in for NVRAM write
 
         ZdtFirmware     _firmware     = ZdtFirmware::Emm;
         ZdtChecksum     _checksum     = ZdtChecksum::Fixed6B;
@@ -203,6 +219,8 @@ namespace MotorDrivers {
         uint32_t _stopFailures  = 0;
         uint32_t _ackFailures   = 0;
         uint32_t _txFailures    = 0;
+        uint32_t _microstepFailures = 0;
+        uint32_t _nextMicrostepRetryMs = 0;
         uint32_t _nextPollMs    = 0;
         uint32_t _lastSendMs    = 0;
         uint32_t _lastAckWarnMs = 0;

@@ -2558,23 +2558,30 @@ axes.<letter>.motorN.zdt:
     description: |
       Invert the direction of the streamed position deltas.
 
-  speed_rpm:
-    type: integer
-    min: 1
-    max: 3000
-    default: '600'
+  write_microsteps:
+    type: boolean
+    default: 'false'
     tuning: per-machine
     description: |
-      Maximum following speed in RPM.  X42S free-protocol speed fields are limited to 3000 RPM, so values above that are rejected.
+      Explicit opt-in: write axis.microsteps to the ZDT driver's NVRAM (0x84, store=1) on the first sync.  Off by default because it changes persistent drive configuration.
+
+  speed_rpm:
+    type: integer
+    min: 0
+    max: 3000
+    default: '0'
+    tuning: per-machine
+    description: |
+      Fixed-stream following speed in RPM.  0 derives the required value from the axis maximum feed (10% headroom in fixed mode).
 
   accel:
     type: integer
-    min: 0
+    min: -1
     max: 65535
-    default: '80'
+    default: '-1'
     tuning: per-machine
     description: |
-      Driver acceleration. For Emm this is the native 0..255 ramp setting; for X it is the native RPM/s value (0..65535).
+      Driver acceleration. -1 derives it from the axis acceleration: Emm uses the native 0..255 ramp; X uses RPM/s (1..65535).
 
   update_ms:
     type: integer

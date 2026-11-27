@@ -87,6 +87,7 @@ namespace MotorDrivers {
         // packet carries at most 8 bytes; these limits cover split commands.
         static constexpr size_t MAX_MESSAGE  = 32;
         static constexpr size_t MAX_RESPONSE = 16;
+        static constexpr size_t MAX_CONFIG_RESPONSE = 40;
         static constexpr size_t FRAME_PAYLOAD  = 7;  // function byte + 7 payload
 
         // A physical frame produced from a logical ZDT command.  CanFrame is the
@@ -204,6 +205,11 @@ namespace MotorDrivers {
         // and return its length, or 0 when the output buffer is too small.
 
         static size_t build_read_position(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
+        static size_t build_read_config(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
+
+        // Parse the Emm 0x42 response payload (response[0] is the function).
+        // The microstep field is the 9th payload byte (manual byte 10).
+        static bool parse_config_microsteps(const uint8_t* data, size_t length, uint8_t& microsteps);
 
         // Split one logical command (message[0] is the function code, followed
         // by payload and checksum) into physical frames.  Returns the number
@@ -217,6 +223,16 @@ namespace MotorDrivers {
         static size_t build_enable(uint8_t address, bool enable, ZdtChecksum checksum, uint8_t* out, size_t capacity);
         static size_t build_stop(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
         static size_t build_zero(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
+
+        // Write the driver's microstep setting (0x84, NVRAM store bit).
+        // microsteps is 1..256; the wire value 0 encodes 256.
+        static size_t build_write_microstep(
+            uint8_t address, uint16_t microsteps, bool store, ZdtChecksum checksum, uint8_t* out, size_t capacity);
+
+        // Convert an axis acceleration in RPM/s to the Emm native 0..255 ramp
+        // setting.  Emm ramps 1 RPM every (256-acc)*50 us; acc=0 is the
+        // "no curve" special case and is kept out of the clamp range.
+        static uint16_t emm_accel_from_rpm_per_sec(double rpm_per_sec);
         static size_t build_sync(uint8_t address, ZdtChecksum checksum, uint8_t* out, size_t capacity);
 
         // Emit a relative move from the previously commanded target.  The
@@ -275,6 +291,8 @@ namespace MotorDrivers {
         // ====================================================================
         // 0xF3/0xFE/0x0A/0xFD can enable, stop, zero or move the motor.
         // 0x48/0x84/0xAE can alter NVRAM (address, microsteps, protocol
+        // selection).  The ZDT motor writes 0x84 only with explicit
+        // write_microsteps: true and only after reading 0x42.
         // settings) and may make a drive unresponsive until power-cycled.
         // Read-only diagnostics must use 0x1F/0x36/0x42 only.
     };

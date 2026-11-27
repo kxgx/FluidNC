@@ -11,12 +11,12 @@ zdt:
   address: 1
   firmware: Emm          # Emm or X
   checksum: 6B           # 6B, XOR or CRC8
-  counts_per_rev: 3200
+  counts_per_rev: 0       # 0 = derive from axis mechanics
   counts_per_step: 1
   invert_direction: false
   update_ms: 20
-  speed_rpm: 20
-  accel: 50
+  speed_rpm: 0            # 0 = derive from axis max feed
+  accel: -1               # -1 = derive from axis acceleration
   mode: position_stream
   position_mode: relative_previous
   speed_source: fixed
@@ -54,10 +54,19 @@ axes:
 
 `counts_per_rev` may be omitted (or set to 0); the driver derives
 `full_steps_per_rev * microsteps`.  `steps_per_mm` is also omitted and derived
-by the Axis.  This does not write the drive's MStep: `microsteps` must match the
-drive setting.  For `Emm`, it also determines the pulse units; for `X` the
-position command is already in 0.1 degree, so the value is only the FluidNC
-step mapping.
+by the Axis.
+
+The drive's microstep setting is **not changed by default**.  Set
+`write_microsteps: true` to explicitly opt in; on the first sync the firmware
+reads the drive's 0x42 configuration, and only if its MStep differs does it
+send 0x84 with the NVRAM store bit.  This is an Emm-only feature; for `X` the
+position command is 0.1 degree and `microsteps` is only the FluidNC step
+mapping, so this driver never overwrites X MStep.
+
+`speed_rpm: 0` derives a fixed-stream value from the axis maximum feed with
+10% headroom.  `accel: -1` derives the native driver value from
+`acceleration_mm_per_sec2`: Emm gets its 0..255 ramp, X gets RPM/s.  Explicit
+non-zero values keep the historical behavior.
 
 ## Speed sources
 
@@ -104,10 +113,31 @@ The driver never reads the ZDT's actual position for closed-loop correction;
 `planner` follows the step stream, not a measured velocity.  Do not treat
 `M400` or program end as proof that the physical axis has settled.
 
+### Derived acceleration
+
+When `accel` is `-1`, the firmware converts axis acceleration to the driver's
+native unit:
+
+```text
+rpm/s = acceleration_mm_per_sec2 * steps_per_mm * counts_per_step
+        / counts_per_rev * 60
+Emm:  acc = 256 - 20000 / rpm_per_s  (clamped 1..255)
+X:    acc = rpm/s                    (clamped 1..65535)
+```
+
+The Emm `acc: 0` "no curve" mode remains available only by setting it
+explicitly.  A drive-side `MStep` change is never performed while motion is
+enabled; configuration is checked before the first enable.
+
 ## Required drive-side prerequisites
 
 - FWType, Checksum, CAN baud and ID must match `firmware`, `checksum`,
   `can.baud` and `address`.
+- When `write_microsteps: true`, the drive must accept 0x84 and its NVRAM
+  write.  The config is read first; an unchanged value is not rewritten.
+  If the read/write fails, motion stays gated and the driver is not reset;
+  fix power/wiring/parameter lock, then reboot or reset.  Back up the drive's
+  MStep before enabling this option.
 - `Response` must be `Receive` or `Both`; `None`/`Reached`/`Other` do not
   provide the command ACK expected by this streaming driver and can trigger
   HardStop after repeated missing replies.
@@ -132,7 +162,10 @@ To roll back behavior, change only:
 speed_source: fixed
 ```
 
-A full reset/reload is required because a soft reset does not re-read
-`config.yaml`.  To roll back to an older firmware, restore the matching old
-config backup as well; older firmware may not know the new
-`mode`/`position_mode`/`speed_source` keys.
+To roll back automatically derived values, restore explicit
+`counts_per_rev`, `speed_rpm` and `accel` values.  Older firmware may reject
+`speed_rpm: 0` and `accel: -1`; restore the old config backup before flashing
+an older firmware.  A full reset/reload is required because a soft reset does
+not re-read `config.yaml`.  If `write_microsteps: true` was used, the drive's
+NVRAM MStep was changed and must be restored with the vendor tool or 0x84
+before running the old configuration.

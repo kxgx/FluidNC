@@ -83,6 +83,25 @@ namespace MotorDrivers {
         return finish(out, 2, checksumMode);
     }
 
+    size_t ZdtProtocol::build_read_config(uint8_t address, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
+        if (capacity < 4) {
+            return 0;
+        }
+        out[0] = address;
+        out[1] = ZdtProtocol::Function::READ_CONFIG;
+        out[2] = ZdtProtocol::Sub::READ_CONFIG_6C;
+        return finish(out, 3, checksumMode);
+    }
+
+    bool ZdtProtocol::parse_config_microsteps(const uint8_t* data, size_t length, uint8_t& microsteps) {
+        // Emm response payload: 42 21 15 ... microstep at payload index 8.
+        if (!data || length < 9 || data[0] != ZdtProtocol::Function::READ_CONFIG) {
+            return false;
+        }
+        microsteps = data[8];
+        return true;
+    }
+
     size_t ZdtProtocol::build_frames(uint8_t address, const uint8_t* message, size_t length, Frame* out, size_t capacity) {
         if (!message || length < 2 || !out || !capacity) {
             return 0;
@@ -132,7 +151,7 @@ namespace MotorDrivers {
     }
 
     size_t ZdtProtocol::build_stop(uint8_t address, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
-        if (capacity < 5) {
+        if (capacity < 6) {
             return 0;
         }
         out[0] = address;
@@ -304,6 +323,37 @@ namespace MotorDrivers {
         counts = int32_t(std::max<int64_t>(INT32_MIN, std::min<int64_t>(INT32_MAX, value)));
         return true;
     }
+    size_t ZdtProtocol::build_write_microstep(
+        uint8_t address, uint16_t microsteps, bool store, ZdtChecksum checksumMode, uint8_t* out, size_t capacity) {
+        if (microsteps < 1 || microsteps > 256) {
+            return 0;
+        }
+        if (capacity < 5) {
+            return 0;
+        }
+        out[0] = address;
+        out[1] = ZdtProtocol::Function::WRITE_MICROSTEP;
+        out[2] = ZdtProtocol::Sub::MICROSTEP_8A;
+        out[3] = uint8_t(store ? 1 : 0);
+        out[4] = uint8_t(microsteps == 256 ? 0 : microsteps);
+        return finish(out, 5, checksumMode);
+    }
+
+    uint16_t ZdtProtocol::emm_accel_from_rpm_per_sec(double rpm_per_sec) {
+        if (!(rpm_per_sec > 0.0)) {
+            return 1;
+        }
+        // 1 RPM per (256 - acc) * 50 us -> rpm/s = 20000 / (256 - acc).
+        const double acc = 256.0 - 20000.0 / rpm_per_sec;
+        if (acc <= 1.0) {
+            return 1;
+        }
+        if (acc >= 255.0) {
+            return 255;
+        }
+        return uint16_t(acc + 0.5);
+    }
+
 }
 
 #endif

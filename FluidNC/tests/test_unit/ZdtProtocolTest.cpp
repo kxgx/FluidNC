@@ -39,6 +39,43 @@ TEST(ZdtProtocol, SplitsFramesLikeVendorCanExample) {
     EXPECT_EQ(ZdtProtocol::build_frames(1, logical + 1, sizeof(logical) - 1, frames, 1), 0u);
 }
 
+
+
+TEST(ZdtProtocol, ParsesEmmConfigMicrosteps) {
+    // Manual 0x42 example payload (address omitted): 42 21 15 19 02 02 02 00 10 01 ...
+    const uint8_t payload[] = { 0x42, 0x21, 0x15, 0x19, 0x02, 0x02, 0x02, 0x00, 0x10, 0x01 };
+    uint8_t microsteps = 0;
+    ASSERT_TRUE(ZdtProtocol::parse_config_microsteps(payload, sizeof(payload), microsteps));
+    EXPECT_EQ(microsteps, 0x10);
+
+    uint8_t short_payload[3] = { 0x42, 0x21, 0x15 };
+    EXPECT_FALSE(ZdtProtocol::parse_config_microsteps(short_payload, sizeof(short_payload), microsteps));
+}
+
+TEST(ZdtProtocol, BuildsMicrostepWrite) {
+    uint8_t out[16] = {};
+    ASSERT_EQ(ZdtProtocol::build_write_microstep(1, 256, true, ZdtChecksum::Fixed6B, out, sizeof(out)), 6u);
+    const uint8_t expected256[] = { 0x01, 0x84, 0x8A, 0x01, 0x00, 0x6B };
+    EXPECT_EQ(std::memcmp(out, expected256, sizeof(expected256)), 0);
+
+    ASSERT_EQ(ZdtProtocol::build_write_microstep(3, 16, false, ZdtChecksum::Fixed6B, out, sizeof(out)), 6u);
+    const uint8_t expected16[] = { 0x03, 0x84, 0x8A, 0x00, 0x10, 0x6B };
+    EXPECT_EQ(std::memcmp(out, expected16, sizeof(expected16)), 0);
+
+    EXPECT_EQ(ZdtProtocol::build_write_microstep(1, 0, true, ZdtChecksum::Fixed6B, out, sizeof(out)), 0u);
+    EXPECT_EQ(ZdtProtocol::build_write_microstep(1, 257, true, ZdtChecksum::Fixed6B, out, sizeof(out)), 0u);
+    uint8_t exact[6] = {};
+    EXPECT_EQ(ZdtProtocol::build_write_microstep(1, 16, true, ZdtChecksum::Fixed6B, exact, sizeof(exact)), 6u);
+}
+
+TEST(ZdtProtocol, DerivesEmmAcceleration) {
+    EXPECT_EQ(ZdtProtocol::emm_accel_from_rpm_per_sec(0.0), 1);
+    EXPECT_EQ(ZdtProtocol::emm_accel_from_rpm_per_sec(75.0), 1);
+    EXPECT_EQ(ZdtProtocol::emm_accel_from_rpm_per_sec(1500.0), 243);
+    EXPECT_EQ(ZdtProtocol::emm_accel_from_rpm_per_sec(20000.0), 255);
+    EXPECT_EQ(ZdtProtocol::emm_accel_from_rpm_per_sec(50000.0), 255);
+}
+
 TEST(ZdtProtocol, BuildsEnable) {
     uint8_t frame[8] = {};
     size_t  len      = ZdtProtocol::build_enable(1, true, ZdtChecksum::Fixed6B, frame, sizeof(frame));

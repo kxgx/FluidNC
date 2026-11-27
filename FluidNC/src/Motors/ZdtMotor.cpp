@@ -21,6 +21,7 @@ using namespace Machine;
 namespace MotorDrivers {
     namespace {
         constexpr uint32_t TRANSACTION_TIMEOUT_MS = ZdtProtocol::Timing::TRANSACTION_TIMEOUT_MS;
+        constexpr uint32_t RETRY_MS               = 500;
 
         void IRAM_ATTR zdt_step_thunk(MotorDriver* driver) {
             static_cast<ZdtMotor*>(driver)->step_isr();
@@ -69,11 +70,9 @@ namespace MotorDrivers {
         }
         Assert(_countsPerRev >= ZdtProtocol::Limits::COUNTS_PER_REV_MIN && _countsPerRev <= ZdtProtocol::Limits::COUNTS_PER_REV_MAX, "zdt counts_per_rev is outside the protocol range");
         Assert(_countsPerStep > 0.0f, "zdt counts_per_step must be positive");
-        Assert(_speedRpm >= ZdtProtocol::Limits::SPEED_RPM_MIN && _speedRpm <= ZdtProtocol::Limits::SPEED_RPM_MAX, "zdt speed_rpm is outside the X42S free-protocol range");
         Assert(_speedMarginPct >= ZdtProtocol::Limits::SPEED_MARGIN_MIN && _speedMarginPct <= ZdtProtocol::Limits::SPEED_MARGIN_MAX, "zdt speed_margin_pct is outside the protocol range");
-        Assert(_accel >= 0 && _accel <= 65535, "zdt accel must be 0..65535");
+        Assert(_accel >= -1 && _accel <= 65535, "zdt accel must be -1 (auto) or 0..65535");
         Assert(_updateMs >= ZdtProtocol::Limits::UPDATE_MS_MIN && _updateMs <= ZdtProtocol::Limits::UPDATE_MS_MAX, "zdt update_ms is outside the protocol range");
-
         Assert(string_util::equal_ignore_case(_modeName, "position_stream"),
                "zdt mode must be position_stream; other motion modes are not implemented");
         if (string_util::equal_ignore_case(_positionModeName, "relative_previous")) {
@@ -96,17 +95,56 @@ namespace MotorDrivers {
         } else {
             Assert(false, "zdt firmware must be Emm or X");
         }
-        if (_firmware == ZdtFirmware::Emm) {
-            Assert(_accel >= ZdtProtocol::Limits::ACCEL_EMM_MIN && _accel <= ZdtProtocol::Limits::ACCEL_EMM_MAX, "zdt Emm accel is the native 0..255 ramp setting");
-        } else {
-            Assert(_accel >= 1, "zdt X accel is RPM/s and must be at least 1");
+        // Only Emm has a documented MStep field that the 0x84 command changes.
+        // X uses angle units and keeps its own drive MStep setting; axis
+        // microsteps there are only the FluidNC step mapping.
+        if (_firmware == ZdtFirmware::Emm && _writeMicrosteps) {
+            _driverMicrosteps = axisConfig->_microsteps;
         }
+        // Accel is optional: derive the native driver value from the axis
+        // acceleration and the configured mechanics.  Emm uses its 0..255
+        // ramp; X uses RPM/s directly.
+        if (_accel < 0) {
+            const double rpmPerSec = double(axisConfig->_acceleration) * double(axisConfig->_stepsPerMm) *
+                                     double(_countsPerStep) / double(_countsPerRev) * 60.0;
+            if (_firmware == ZdtFirmware::Emm) {
+                _accel = ZdtProtocol::emm_accel_from_rpm_per_sec(rpmPerSec);
+            } else if (rpmPerSec < 1.0) {
+                _accel = 1;
+            } else if (rpmPerSec > 65535.0) {
+                _accel = 65535;
+            } else {
+                _accel = int32_t(std::lround(rpmPerSec));
+            }
+            log_info("ZDT CAN: address " << int(_address) << " derived accel " << _accel << " from axis acceleration "
+                                         << axisConfig->_acceleration << " mm/s^2 (" << rpmPerSec << " RPM/s)");
+        }
+
+        if (_firmware == ZdtFirmware::Emm) {
+            Assert(_accel >= ZdtProtocol::Limits::ACCEL_EMM_MIN && _accel <= ZdtProtocol::Limits::ACCEL_EMM_MAX,
+                   "zdt Emm accel is the native 0..255 ramp setting");
+        } else {
+            Assert(_accel >= 1 && _accel <= 65535, "zdt X accel must be 1..65535 RPM/s");
+        }
+
         // The streamed target must be able to cover the axis's configured
         // maximum feed.  This applies to fixed speed too: fixed does not mean
         // "any speed is safe" - a too-small RPM leaves an invisible following
         // error because ZDT streaming is open-loop with respect to position.
         const double requiredRpm = double(axisConfig->_maxRate) * double(axisConfig->_stepsPerMm) * double(_countsPerStep) /
                                    double(_countsPerRev);
+        if (_speedRpm == 0) {
+            // Fixed mode sends the speed on every position frame; leave 10%
+            // headroom so rounding at the max feed does not leave a following
+            // error.  Planner mode already has its own configurable margin.
+            const double autoRpm = requiredRpm * (_plannerSpeed ? (100.0 + double(_speedMarginPct)) / 100.0 : 1.10);
+            Assert(autoRpm <= double(ZdtProtocol::Limits::SPEED_RPM_MAX),
+                   "zdt auto speed_rpm exceeds 3000 RPM; lower axis max feed or increase distance_per_rev");
+            _speedRpm = std::max(1, std::min(int(std::ceil(autoRpm - 1e-9)), int(ZdtProtocol::Limits::SPEED_RPM_MAX)));
+            log_info("ZDT CAN: address " << int(_address) << " derived speed_rpm " << _speedRpm << " from axis max feed");
+        }
+        Assert(_speedRpm >= ZdtProtocol::Limits::SPEED_RPM_MIN && _speedRpm <= ZdtProtocol::Limits::SPEED_RPM_MAX,
+               "zdt speed_rpm is outside the X42S free-protocol range");
         if (_plannerSpeed) {
             Assert(_firmware == ZdtFirmware::Emm, "zdt speed_source=planner currently requires firmware Emm");
             // The margin is applied before the speed_rpm clamp, so speed_rpm
@@ -203,7 +241,7 @@ namespace MotorDrivers {
     }
 
     bool ZdtMotor::transact(
-        const uint8_t* request, size_t length, uint8_t function, uint8_t* response, size_t& response_len) {
+        const uint8_t* request, size_t length, uint8_t function, uint8_t* response, size_t& response_len, bool expect_ack) {
         response_len      = 0;
         _lastSendOk       = false;
         _lastAckError     = false;
@@ -231,6 +269,9 @@ namespace MotorDrivers {
         response_len        = _bus->receive_frame(responseId, extended, response, ZdtProtocol::MAX_RESPONSE, TRANSACTION_TIMEOUT_MS);
         if (!response_len || !extended || uint8_t(responseId >> 8) != uint8_t(_address)) {
             return false;
+        }
+        if (!expect_ack) {
+            return true;
         }
         if (response[0] == function && response_len >= 3) {
             const uint8_t status = response[1];
@@ -273,6 +314,108 @@ namespace MotorDrivers {
         uint8_t response[ZdtProtocol::MAX_RESPONSE];
         size_t  response_len = 0;
         return transact(request, length, ZdtProtocol::Function::STOP, response, response_len);
+    }
+
+    bool ZdtMotor::read_driver_config(uint8_t* response, size_t& response_len) {
+        response_len = 0;
+        if (!_bus || !_bus->ready()) {
+            return false;
+        }
+        uint8_t request[ZdtProtocol::MAX_MESSAGE];
+        const size_t length = ZdtProtocol::build_read_config(uint8_t(_address), _checksum, request, sizeof(request));
+        if (!length) {
+            return false;
+        }
+
+        CanBus::Lock lock(*_bus);
+        _bus->flush_receive();
+        ZdtProtocol::Frame frames[(ZdtProtocol::MAX_MESSAGE / ZdtProtocol::FRAME_PAYLOAD) + 1];
+        const size_t frame_count =
+            ZdtProtocol::build_frames(uint8_t(_address), request + 1, length - 1, frames, sizeof(frames) / sizeof(frames[0]));
+        if (!frame_count || !_bus->send_frames(frames, frame_count, TRANSACTION_TIMEOUT_MS)) {
+            return false;
+        }
+
+        const uint32_t deadline = millis() + TRANSACTION_TIMEOUT_MS;
+        uint32_t       expected = 0;
+        while (uint32_t(millis() - deadline) > 0x80000000u) {
+            uint32_t remaining = deadline - millis();
+            if (!remaining) {
+                break;
+            }
+            uint32_t id       = 0;
+            bool     extended = false;
+            uint8_t  chunk[8] = {};
+            const size_t chunk_len = _bus->receive_frame(id, extended, chunk, sizeof(chunk), remaining);
+            if (!chunk_len) {
+                break;
+            }
+            if (!extended || uint8_t(id >> 8) != uint8_t(_address)) {
+                continue;
+            }
+            const size_t packet = id & 0xFFu;
+            if (packet == 0) {
+                if (chunk_len < 2 || chunk[0] != ZdtProtocol::Function::READ_CONFIG) {
+                    return false;
+                }
+                expected = size_t(chunk[1]) > 1 ? size_t(chunk[1]) - 1 : 0;
+            }
+            if (chunk[0] != ZdtProtocol::Function::READ_CONFIG) {
+                continue;
+            }
+            const size_t offset = packet == 0 ? 0 : (response_len);
+            const size_t copy   = packet == 0 ? chunk_len : chunk_len - 1;
+            if (response_len + copy > ZdtProtocol::MAX_CONFIG_RESPONSE) {
+                break;
+            }
+            if (packet == 0) {
+                memcpy(response, chunk, chunk_len);
+                response_len = chunk_len;
+            } else {
+                memcpy(response + offset, chunk + 1, copy);
+                response_len += copy;
+            }
+            if (expected && response_len >= expected) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool ZdtMotor::write_driver_microsteps() {
+        if (_driverMicrosteps <= 0 || _bus == nullptr) {
+            return true;
+        }
+        uint8_t request[ZdtProtocol::MAX_MESSAGE];
+        uint8_t response[ZdtProtocol::MAX_CONFIG_RESPONSE];
+        size_t  response_len = 0;
+
+        // Read the current Emm configuration first; only touch NVRAM when the
+        // requested microstep count actually differs.  The 0x42 response is
+        // multi-frame, so it cannot use the short ACK transaction.
+        uint8_t current = 0;
+        if (!read_driver_config(response, response_len) ||
+            !ZdtProtocol::parse_config_microsteps(response, response_len, current)) {
+            return false;
+        }
+        const uint8_t desired = uint8_t(_driverMicrosteps == 256 ? 0 : _driverMicrosteps);
+        if (current == desired) {
+            return true;
+        }
+
+        const size_t length = ZdtProtocol::build_write_microstep(
+            uint8_t(_address), uint16_t(_driverMicrosteps), true, _checksum, request, sizeof(request));
+        if (!length || !transact(request, length, ZdtProtocol::Function::WRITE_MICROSTEP, response, response_len)) {
+            return false;
+        }
+        // Read back after the NVRAM write; a locked parameter or a dropped
+        // configuration change must keep motion gated instead of silently
+        // streaming in the wrong pulse scale.
+        if (!read_driver_config(response, response_len) ||
+            !ZdtProtocol::parse_config_microsteps(response, response_len, current)) {
+            return false;
+        }
+        return current == desired;
     }
 
     void ZdtMotor::report_motion_fault(const char* reason) {
@@ -328,6 +471,26 @@ namespace MotorDrivers {
                 report_motion_fault("emergency stop could not be delivered");
             }
             return;
+        }
+
+        if (!_microstepsApplied && _driverMicrosteps > 0) {
+            if (int32_t(now_ms - _nextMicrostepRetryMs) < 0) {
+                return;
+            }
+            // Apply the human-readable axis microstep setting once per boot,
+            // before any enable/motion command.  0x42 is read first so an
+            // unchanged setting does not write NVRAM.
+            if (!write_driver_microsteps()) {
+                ++_microstepFailures;
+                _nextMicrostepRetryMs = now_ms + RETRY_MS;
+                if (_microstepFailures == 3) {
+                    log_error("ZDT " << name() << ": cannot read/write driver microstep setting; motion remains gated");
+                }
+                return;
+            }
+            _microstepsApplied = true;
+            _microstepFailures = 0;
+            log_info("ZDT CAN: address " << int(_address) << " driver microsteps set to " << int(_driverMicrosteps));
         }
 
         if (_disableRequested != !_enabled) {
